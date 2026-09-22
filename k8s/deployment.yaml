@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: casio-price-alerts
+  labels:
+    app: casio-price-alerts
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: casio-price-alerts
+  template:
+    metadata:
+      labels:
+        app: casio-price-alerts
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: watcher
+          image: casio-price-alerts:1.0.0
+          args: ["python3", "-m", "casio_watch", "--loop"]
+          envFrom:
+            - secretRef:
+                name: casio-price-alerts
+          env:
+            - name: MIN_DISCOUNT_PCT
+              value: "10"
+            - name: POLL_SECONDS
+              value: "60"
+            - name: HEARTBEAT_PATH
+              value: /tmp/heartbeat
+          resources:
+            requests:
+              memory: 32Mi
+              cpu: 10m
+            limits:
+              memory: 128Mi
+              cpu: 100m
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: state
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - |
+                  import os, sys, time
+                  p = os.environ["HEARTBEAT_PATH"]
+                  sys.exit(0 if os.path.exists(p) and time.time() - float(open(p).read()) < 300 else 1)
+            initialDelaySeconds: 90
+            periodSeconds: 60
+            failureThreshold: 2
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: casio-price-alerts-state
+        - name: tmp
+          emptyDir: {}

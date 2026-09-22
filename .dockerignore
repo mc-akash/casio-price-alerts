@@ -1,0 +1,11 @@
+tests/
+docs/
+k8s/
+.git/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+README.md

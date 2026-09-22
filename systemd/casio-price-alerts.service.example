@@ -1,0 +1,27 @@
+[Unit]
+Description=Casio India deal watcher
+Documentation=file://%h/code_base/casio-price-alerts/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/code_base/casio-price-alerts
+Environment=NTFY_TOPIC=REPLACE_WITH_YOUR_TOPIC
+Environment=STATE_PATH=%S/casio-price-alerts/state.json
+Environment=HEARTBEAT_PATH=%S/casio-price-alerts/heartbeat
+Environment=MIN_DISCOUNT_PCT=10
+Environment=POLL_SECONDS=60
+Environment=PYTHONUNBUFFERED=1
+StateDirectory=casio-price-alerts
+ExecStart=/usr/bin/python3 -m casio_watch --loop
+Restart=always
+RestartSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%S/casio-price-alerts
+
+[Install]
+WantedBy=default.target

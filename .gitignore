@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+state.json
+state.json.bak
+.venv/
+k8s/secret.yaml
+.env
+heartbeat
