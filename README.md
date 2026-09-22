@@ -61,6 +61,30 @@ State lives in `~/.local/state/casio-price-alerts/`. Note this only polls while 
 is awake and online — overnight flash sales are missed. Use the Kubernetes deployment
 for genuine 24/7 coverage.
 
+## Run it with Docker
+
+```bash
+cp .env.example .env          # then edit in your topic
+docker compose up -d --build
+docker compose logs -f
+```
+
+State persists in the `state` named volume, so restarts do not re-announce deals
+already seen. A healthcheck restarts the container if no poll completes in 5 minutes.
+
+```bash
+docker compose ps             # health status
+docker compose down           # stop, keeping state
+docker compose down -v        # stop and wipe state (next start re-announces)
+```
+
+If Docker reports `permission denied ... /var/run/docker.sock`, add yourself to the
+docker group and start a new login session:
+
+```bash
+sudo usermod -aG docker $USER
+```
+
 ## Deploy
 
 See `k8s/`. Single replica, `Recreate` strategy — a second replica would double-alert.

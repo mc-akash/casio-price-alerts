@@ -1,0 +1,52 @@
+services:
+  watcher:
+    build: .
+    image: casio-price-alerts:1.0.0
+    container_name: casio-price-alerts
+    restart: unless-stopped
+
+    # Supplies NTFY_TOPIC and any thresholds you override. Copy .env.example first.
+    env_file: .env
+
+    # Container paths win over whatever .env uses for a local run.
+    environment:
+      STATE_PATH: /data/state.json
+      HEARTBEAT_PATH: /tmp/heartbeat
+
+    volumes:
+      - state:/data
+
+    # The app only ever writes its state file and heartbeat.
+    read_only: true
+    tmpfs:
+      - /tmp
+
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    # Restarts the container if no poll has completed in 5 minutes, which catches a
+    # wedged socket that would otherwise leave the process alive but useless.
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - |
+          import os, sys, time
+          p = os.environ["HEARTBEAT_PATH"]
+          sys.exit(0 if os.path.exists(p) and time.time() - float(open(p).read()) < 300 else 1)
+      interval: 60s
+      timeout: 10s
+      retries: 2
+      start_period: 90s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  state:
