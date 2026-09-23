@@ -1,0 +1,52 @@
+# Deployment compose file: runs a pre-built image, no source checkout required.
+#
+# On the VM you only need this file plus a .env holding NTFY_TOPIC.
+#   docker load < casio-price-alerts-1.0.0.tar.gz
+#   docker compose -f docker-compose.prod.yaml up -d
+
+services:
+  watcher:
+    image: casio-price-alerts:1.0.0
+    container_name: casio-price-alerts
+    restart: unless-stopped
+
+    env_file: .env
+
+    environment:
+      STATE_PATH: /data/state.json
+      HEARTBEAT_PATH: /tmp/heartbeat
+
+    volumes:
+      - state:/data
+
+    read_only: true
+    tmpfs:
+      - /tmp
+
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - |
+          import os, sys, time
+          p = os.environ["HEARTBEAT_PATH"]
+          sys.exit(0 if os.path.exists(p) and time.time() - float(open(p).read()) < 300 else 1)
+      interval: 60s
+      timeout: 10s
+      retries: 2
+      start_period: 90s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  state:

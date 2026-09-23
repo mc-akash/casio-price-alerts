@@ -85,6 +85,26 @@ docker group and start a new login session:
 sudo usermod -aG docker $USER
 ```
 
+## Deploy a pre-built image (no source checkout)
+
+Export the image on a machine that can build it:
+
+```bash
+docker build -t casio-price-alerts:1.0.0 .
+docker save casio-price-alerts:1.0.0 | gzip -9 > casio-price-alerts-1.0.0.tar.gz
+```
+
+Copy the tarball, `docker-compose.prod.yaml` and your `.env` to the target host, then:
+
+```bash
+docker load < casio-price-alerts-1.0.0.tar.gz
+docker compose -f docker-compose.prod.yaml up -d
+docker compose -f docker-compose.prod.yaml logs -f
+```
+
+The image is architecture-specific. One built on x86_64 will not run on an arm64
+host; rebuild there, or use `docker buildx build --platform` to produce both.
+
 ## Deploy
 
 See `k8s/`. Single replica, `Recreate` strategy — a second replica would double-alert.
