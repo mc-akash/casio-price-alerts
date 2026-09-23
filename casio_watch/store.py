@@ -1,4 +1,4 @@
-"""Fetch the collection catalogue and map products to Deal objects."""
+"""Fetch the whole-store catalogue and map it to Product objects."""
 
 from __future__ import annotations
 
@@ -20,13 +20,27 @@ class FetchError(Exception):
 
 
 @dataclass(frozen=True)
-class Deal:
+class Product:
+    """One catalogue entry, whether in stock or not.
+
+    Out-of-stock products matter: a restock is only visible if we track them, and
+    Shopify omits them from collection feeds entirely.
+    """
+
     handle: str
     title: str
     url: str
     price: float
-    compare_at: float
-    pct: int
+    compare_at: float | None
+    available: bool
+    product_type: str
+    tags: tuple[str, ...]
+
+    @property
+    def discount_pct(self) -> int:
+        if self.compare_at is None:
+            return 0
+        return _discount_pct(self.price, self.compare_at)
 
 
 def _discount_pct(price: float, compare_at: float) -> int:
@@ -35,48 +49,61 @@ def _discount_pct(price: float, compare_at: float) -> int:
     return round((1 - price / compare_at) * 100)
 
 
-def best_deal(product: dict, collection_url: str, min_pct: int) -> Deal | None:
-    """Return the deepest qualifying discount across a product's available variants."""
-    handle = product.get("handle")
-    if not handle:
-        return None
+def _pick_variant(variants: list[dict]) -> dict | None:
+    """Prefer an in-stock variant, deepest discount first; fall back to any variant.
 
-    best: tuple[int, float, float] | None = None
-    for variant in product.get("variants") or []:
-        if not variant.get("available"):
-            continue
+    Falling back matters: a sold-out product still needs a price and a title so a
+    later restock can be recognised as a change rather than a first sighting.
+    """
+    parsed = []
+    for v in variants or []:
         try:
-            price = float(variant["price"])
-            compare_at = float(variant["compare_at_price"])
+            price = float(v["price"])
         except (KeyError, TypeError, ValueError):
             continue
+        cap = v.get("compare_at_price")
+        try:
+            compare_at = float(cap) if cap is not None else None
+        except (TypeError, ValueError):
+            compare_at = None
+        parsed.append((bool(v.get("available")), price, compare_at))
 
-        pct = _discount_pct(price, compare_at)
-        if pct >= min_pct and (best is None or pct > best[0]):
-            best = (pct, price, compare_at)
-
-    if best is None:
+    if not parsed:
         return None
 
-    pct, price, compare_at = best
-    return Deal(
-        handle=handle,
-        title=product.get("title") or handle,
-        url=f"{collection_url}/products/{handle}",
-        price=price,
-        compare_at=compare_at,
-        pct=pct,
-    )
+    in_stock = [p for p in parsed if p[0]]
+    pool = in_stock or parsed
+    best = max(pool, key=lambda t: _discount_pct(t[1], t[2]) if t[2] else 0)
+    return {"available": best[0], "price": best[1], "compare_at": best[2]}
 
 
-def parse_products(payload: dict, collection_url: str, min_pct: int) -> list[Deal]:
-    """Map a products.json payload to the deals that meet the threshold."""
-    deals = []
-    for product in payload.get("products") or []:
-        deal = best_deal(product, collection_url, min_pct)
-        if deal is not None:
-            deals.append(deal)
-    return deals
+def parse_catalogue(payload: dict, cfg) -> list[Product]:
+    """Map a products.json payload to Products, filtered by configured type."""
+    products: list[Product] = []
+    for raw in payload.get("products") or []:
+        handle = raw.get("handle")
+        if not handle:
+            continue
+
+        ptype = raw.get("product_type") or ""
+        if cfg.product_types and ptype not in cfg.product_types:
+            continue
+
+        chosen = _pick_variant(raw.get("variants"))
+        if chosen is None:
+            continue
+
+        products.append(Product(
+            handle=handle,
+            title=raw.get("title") or handle,
+            url=cfg.product_url(handle),
+            price=chosen["price"],
+            compare_at=chosen["compare_at"],
+            available=chosen["available"],
+            product_type=ptype,
+            tags=tuple(raw.get("tags") or ()),
+        ))
+    return products
 
 
 @dataclass(frozen=True)
@@ -88,7 +115,7 @@ class PageResult:
 
 @dataclass(frozen=True)
 class FetchResult:
-    deals: list[Deal] | None
+    products: list[Product] | None
     etags: dict[str, str]
 
 
@@ -132,20 +159,21 @@ def _crawl(cfg, opener) -> list[PageResult]:
 
 def fetch_all(cfg, etags: dict[str, str], opener=urllib.request.urlopen,
               force_full: bool = False) -> FetchResult:
-    """Return current deals, or FetchResult(deals=None) when nothing changed."""
+    """Return the current catalogue, or FetchResult(products=None) when unchanged."""
     if etags and not force_full:
         probes = [fetch_page(cfg, int(page), tag, opener) for page, tag in sorted(etags.items())]
         if all(probe.not_modified for probe in probes):
             log.debug("all %d pages unchanged, skipping cycle", len(probes))
-            return FetchResult(deals=None, etags=etags)
+            return FetchResult(products=None, etags=etags)
 
     pages = _crawl(cfg, opener)
-    deals: list[Deal] = []
+    products: list[Product] = []
     fresh_etags: dict[str, str] = {}
     for index, page in enumerate(pages, start=1):
-        deals.extend(parse_products(page.body, cfg.collection_url, cfg.min_discount_pct))
+        products.extend(parse_catalogue(page.body, cfg))
         if page.etag:
             fresh_etags[str(index)] = page.etag
 
-    log.info("scanned %d page(s), %d deal(s) at >=%d%%", len(pages), len(deals), cfg.min_discount_pct)
-    return FetchResult(deals=deals, etags=fresh_etags)
+    in_stock = sum(1 for p in products if p.available)
+    log.info("scanned %d page(s), %d product(s), %d in stock", len(pages), len(products), in_stock)
+    return FetchResult(products=products, etags=fresh_etags)

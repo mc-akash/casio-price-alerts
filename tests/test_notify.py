@@ -3,32 +3,31 @@ import io
 import pytest
 from urllib.error import HTTPError, URLError
 
+from casio_watch.alerts import Alert
 from casio_watch.config import load_config
 from casio_watch.notify import (MAX_ACTIONS, NotifyError, RETRY_DELAYS,
-                                format_actions, format_message, send)
-from casio_watch.store import Deal
+                                format_actions, format_group, ping, send)
+from casio_watch.store import Product
 
 CFG = load_config({"NTFY_TOPIC": "secret-topic"})
-COLLECTION_URL = "https://casiostore.bhawar.com/collections/watches"
 
 
-def deal(handle, pct, price, compare_at):
-    return Deal(handle=handle, title=handle.upper(),
-                url=f"{COLLECTION_URL}/products/{handle}",
-                price=price, compare_at=compare_at, pct=pct)
+def alert(kind, handle, title, detail="detail"):
+    p = Product(handle=handle, title=title,
+                url=f"https://casiostore.bhawar.com/products/{handle}",
+                price=1000.0, compare_at=None, available=True,
+                product_type="Watches", tags=())
+    return Alert(kind, p, detail)
 
 
-ONE = deal("gma-p2110sc-4a", 30, 6646.50, 9495.00)
-TWO = deal("gm-2110d-3a", 30, 15396.50, 21995.00)
+DEAL = alert("discount", "gma-p2110sc-4a", "GMA-P2110SC-4A", "30% off ₹6,646 (was ₹9,495)")
+DEAL2 = alert("discount", "gm-2110d-3a", "GM-2110D-3A", "30% off ₹15,396")
+RESTOCK = alert("restock", "f-91w", "F-91W-1", "back in stock at ₹1,295")
 
 
 class FakeResponse(io.BytesIO):
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self.close()
-        return False
+    def __enter__(self): return self
+    def __exit__(self, *exc): self.close(); return False
 
 
 class FakeOpener:
@@ -38,153 +37,141 @@ class FakeOpener:
 
     def __call__(self, request, timeout=None):
         self.requests.append(request)
-        result = self.responses.pop(0)
-        if isinstance(result, Exception):
-            raise result
-        return result
+        r = self.responses.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
 
 
 class FakeSleep:
-    def __init__(self):
-        self.calls = []
-
-    def __call__(self, seconds):
-        self.calls.append(seconds)
+    def __init__(self): self.calls = []
+    def __call__(self, s): self.calls.append(s)
 
 
-def test_single_deal_title_is_singular():
-    title, _, _ = format_message([ONE], COLLECTION_URL)
-    assert title == "1 new Casio deal"
+# --- formatting -------------------------------------------------------------
+
+def test_single_alert_title_names_the_product():
+    title, _, _ = format_group("discount", [DEAL])
+    assert title == "New deal: GMA-P2110SC-4A"
 
 
-def test_multiple_deals_title_is_plural():
-    title, _, _ = format_message([ONE, TWO], COLLECTION_URL)
+def test_multiple_alerts_title_counts_them():
+    title, _, _ = format_group("discount", [DEAL, DEAL2])
     assert title == "2 new Casio deals"
 
 
-def test_body_lists_percent_price_and_was_price():
-    _, body, _ = format_message([ONE], COLLECTION_URL)
-    assert body == "GMA-P2110SC-4A — 30% off ₹6,646 (was ₹9,495)"
+def test_restock_title_uses_its_own_wording():
+    assert format_group("restock", [RESTOCK])[0] == "Back in stock: F-91W-1"
 
 
-def test_body_lists_each_deal_on_its_own_line():
-    _, body, _ = format_message([ONE, TWO], COLLECTION_URL)
-    assert len(body.splitlines()) == 2
-
-
-def test_deals_sorted_by_deepest_discount_first():
-    shallow = deal("shallow", 12, 8800.0, 10000.0)
-    _, body, _ = format_message([shallow, ONE], COLLECTION_URL)
-    assert body.splitlines()[0].startswith("GMA-P2110SC-4A")
+def test_body_lists_product_and_detail():
+    _, body, _ = format_group("discount", [DEAL])
+    assert body == "GMA-P2110SC-4A - 30% off ₹6,646 (was ₹9,495)"
 
 
 def test_body_truncates_beyond_max_listed():
-    many = [deal(f"d{i}", 20 + i, 800.0, 1000.0) for i in range(14)]
-    _, body, _ = format_message(many, COLLECTION_URL)
-    lines = body.splitlines()
+    many = [alert("discount", f"h{i}", f"W{i}") for i in range(14)]
+    lines = format_group("discount", many)[1].splitlines()
     assert len(lines) == 11
     assert lines[-1] == "+4 more"
 
 
-def test_click_url_is_the_product_for_a_single_deal():
-    _, _, click = format_message([ONE], COLLECTION_URL)
-    assert click == ONE.url
+def test_click_is_a_product_page_never_a_collection():
+    _, _, click = format_group("discount", [DEAL, DEAL2])
+    assert click == DEAL.product.url
+    assert "collections" not in click
 
 
-def test_click_url_is_the_deepest_deal_for_multiple_deals():
-    deepest = deal("deepest", 55, 450.0, 1000.0)
-    _, _, click = format_message([ONE, TWO, deepest], COLLECTION_URL)
-    assert click == deepest.url
+def test_single_alert_needs_no_action_buttons():
+    assert format_actions([DEAL]) is None
 
 
-def test_click_url_is_never_the_collection_page():
-    _, _, click = format_message([ONE, TWO], COLLECTION_URL)
-    assert click != COLLECTION_URL
-    assert click in {ONE.url, TWO.url}
-
-
-def test_single_deal_needs_no_action_buttons():
-    assert format_actions([ONE]) is None
-
-
-def test_each_deal_gets_an_action_button():
-    actions = format_actions([ONE, TWO])
-    assert actions.count("view,") == 2
-    assert ONE.url in actions
-    assert TWO.url in actions
-
-
-def test_action_buttons_are_capped():
-    many = [deal(f"d{i}", 20 + i, 800.0, 1000.0) for i in range(8)]
+def test_action_button_per_alert_up_to_the_cap():
+    many = [alert("discount", f"h{i}", f"W{i}") for i in range(8)]
     assert format_actions(many).count("view,") == MAX_ACTIONS
 
 
-def test_action_buttons_follow_deepest_discount_first():
-    shallow = deal("shallow", 12, 8800.0, 10000.0)
-    deepest = deal("deepest", 55, 450.0, 1000.0)
-    actions = format_actions([shallow, deepest])
-    assert actions.index(deepest.url) < actions.index(shallow.url)
+def test_action_labels_strip_separators():
+    messy = alert("discount", "m", "GA-2100, Black; Special")
+    actions = format_actions([messy, DEAL])
+    assert f"view, GA-2100 Black Special, {messy.product.url}" in actions
 
 
-def test_action_labels_strip_separators_that_would_corrupt_the_header():
-    messy = Deal(handle="m", title="GA-2100, Black; Special", url=f"{COLLECTION_URL}/products/m",
-                 price=700.0, compare_at=1000.0, pct=30)
-    actions = format_actions([messy, ONE])
-    # ntfy splits actions on ";" and their fields on ",", so a title carrying either
-    # would silently produce a malformed button.
-    assert f"view, GA-2100 Black Special, {messy.url}" in actions
-    assert actions.count(";") == 1
+# --- delivery ---------------------------------------------------------------
+
+def test_send_posts_one_message_per_kind():
+    opener = FakeOpener([FakeResponse(b"ok"), FakeResponse(b"ok")])
+    send(CFG, [DEAL, RESTOCK], opener=opener, sleep=FakeSleep())
+    assert len(opener.requests) == 2
 
 
-def test_send_posts_to_topic_url_with_headers():
+def test_restock_is_sent_at_urgent_priority():
     opener = FakeOpener([FakeResponse(b"ok")])
-    send(CFG, [ONE], opener=opener, sleep=FakeSleep())
-    request = opener.requests[0]
-    assert request.full_url == "https://ntfy.sh/secret-topic"
-    assert request.get_method() == "POST"
-    assert request.get_header("Title") == "1 new Casio deal"
-    assert request.get_header("Priority") == "high"
-    assert request.get_header("Tags") == "fire"
-    assert request.get_header("Click") == ONE.url
+    send(CFG, [RESTOCK], opener=opener, sleep=FakeSleep())
+    assert opener.requests[0].get_header("Priority") == "urgent"
 
 
-def test_send_body_is_utf8_encoded():
+def test_discounts_are_sent_at_high_priority():
     opener = FakeOpener([FakeResponse(b"ok")])
-    send(CFG, [ONE], opener=opener, sleep=FakeSleep())
-    assert "₹" in opener.requests[0].data.decode("utf-8")
+    send(CFG, [DEAL], opener=opener, sleep=FakeSleep())
+    assert opener.requests[0].get_header("Priority") == "high"
 
 
-def test_send_does_nothing_when_there_are_no_deals():
+def test_urgent_kinds_are_sent_before_routine_ones():
+    opener = FakeOpener([FakeResponse(b"ok"), FakeResponse(b"ok")])
+    send(CFG, [DEAL, RESTOCK], opener=opener, sleep=FakeSleep())
+    assert opener.requests[0].get_header("Title").startswith("Back in stock")
+
+
+def test_one_kind_collapses_into_a_single_push():
+    opener = FakeOpener([FakeResponse(b"ok")])
+    send(CFG, [DEAL, DEAL2], opener=opener, sleep=FakeSleep())
+    assert len(opener.requests) == 1
+
+
+def test_send_posts_to_the_topic_url():
+    opener = FakeOpener([FakeResponse(b"ok")])
+    send(CFG, [DEAL], opener=opener, sleep=FakeSleep())
+    assert opener.requests[0].full_url == "https://ntfy.sh/secret-topic"
+
+
+def test_send_does_nothing_without_alerts():
     opener = FakeOpener([])
-    send(CFG, [], opener=opener, sleep=FakeSleep())
-    assert opener.requests == []
+    assert send(CFG, [], opener=opener, sleep=FakeSleep()) == set()
 
 
-def test_send_retries_then_succeeds():
-    opener = FakeOpener([URLError("flaky"), FakeResponse(b"ok")])
+def test_send_returns_no_failures_when_delivered():
+    opener = FakeOpener([FakeResponse(b"ok")])
+    assert send(CFG, [DEAL], opener=opener, sleep=FakeSleep()) == set()
+
+
+def test_failed_kind_reports_its_handles_only():
+    opener = FakeOpener([FakeResponse(b"ok")] + [URLError("down")] * 3)
+    failed = send(CFG, [DEAL, RESTOCK], opener=opener, sleep=FakeSleep())
+    assert failed == {DEAL.product.handle}
+
+
+def test_send_retries_before_giving_up():
+    opener = FakeOpener([URLError("x"), FakeResponse(b"ok")])
     sleeper = FakeSleep()
-    send(CFG, [ONE], opener=opener, sleep=sleeper)
+    send(CFG, [DEAL], opener=opener, sleep=sleeper)
     assert len(opener.requests) == 2
     assert sleeper.calls == [RETRY_DELAYS[0]]
 
 
-def test_send_raises_after_all_retries_exhausted():
-    opener = FakeOpener([URLError("down")] * 3)
-    sleeper = FakeSleep()
-    with pytest.raises(NotifyError, match="3 attempt"):
-        send(CFG, [ONE], opener=opener, sleep=sleeper)
-    assert len(opener.requests) == 3
-    assert sleeper.calls == [RETRY_DELAYS[0], RETRY_DELAYS[1]]
-
-
-def test_send_retries_on_http_error():
-    opener = FakeOpener([HTTPError("u", 500, "err", {}, None), FakeResponse(b"ok")])
-    send(CFG, [ONE], opener=opener, sleep=FakeSleep())
-    assert len(opener.requests) == 2
-
-
 def test_send_never_logs_the_topic(caplog):
     opener = FakeOpener([URLError("down")] * 3)
-    with pytest.raises(NotifyError):
-        send(CFG, [ONE], opener=opener, sleep=FakeSleep())
+    send(CFG, [DEAL], opener=opener, sleep=FakeSleep())
     assert "secret-topic" not in caplog.text
+
+
+def test_ping_is_silent_priority():
+    opener = FakeOpener([FakeResponse(b"ok")])
+    ping(CFG, opener, FakeSleep())
+    assert opener.requests[0].get_header("Priority") == "min"
+
+
+def test_ping_raises_when_undeliverable():
+    opener = FakeOpener([URLError("blocked")] * 3)
+    with pytest.raises(NotifyError):
+        ping(CFG, opener, FakeSleep())

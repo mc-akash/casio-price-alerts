@@ -23,18 +23,23 @@ class Config:
     ntfy_server: str
     min_discount_pct: int
     poll_seconds: int
-    collection: str
+    product_types: tuple[str, ...]
+    watchlist: tuple[str, ...]
     state_path: Path
-    seed_silent: bool
     heartbeat_path: Path
     log_level: str
 
-    @property
-    def collection_url(self) -> str:
-        return f"{STORE_HOST}/collections/{self.collection}"
-
     def products_url(self, page: int) -> str:
-        return f"{self.collection_url}/products.json?limit={PAGE_SIZE}&page={page}"
+        """The whole-store feed.
+
+        A collection feed would be smaller, but Shopify drops out-of-stock products
+        from collections and keeps hundreds of watches outside /collections/watches
+        entirely, so a collection cannot see restocks or every sale.
+        """
+        return f"{STORE_HOST}/products.json?limit={PAGE_SIZE}&page={page}"
+
+    def product_url(self, handle: str) -> str:
+        return f"{STORE_HOST}/products/{handle}"
 
     @property
     def ntfy_url(self) -> str:
@@ -56,6 +61,15 @@ def _int(env: Mapping[str, str], key: str, default: int) -> int:
         return int(raw)
     except ValueError as exc:
         raise ConfigError(f"{key} must be an integer, got {raw!r}") from exc
+
+
+def _csv(env: Mapping[str, str], key: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    raw = env.get(key, "").strip()
+    if not raw:
+        return default
+    if raw == "*":
+        return ()
+    return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
 def _bool(env: Mapping[str, str], key: str, default: bool) -> bool:
@@ -84,9 +98,9 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         ntfy_server=env.get("NTFY_SERVER", "https://ntfy.sh").strip().rstrip("/"),
         min_discount_pct=min_pct,
         poll_seconds=poll,
-        collection=env.get("COLLECTION", "watches").strip() or "watches",
+        product_types=_csv(env, "PRODUCT_TYPES", ("Watches",)),
+        watchlist=_csv(env, "WATCHLIST", ()),
         state_path=Path(env.get("STATE_PATH", "/data/state.json").strip()),
-        seed_silent=_bool(env, "SEED_SILENT", False),
         heartbeat_path=Path(env.get("HEARTBEAT_PATH", "/tmp/heartbeat").strip()),
         log_level=env.get("LOG_LEVEL", "INFO").strip().upper() or "INFO",
     )

@@ -12,15 +12,31 @@ service, a Docker container, or a Kubernetes pod.
 
 ## How it works
 
-Reads Shopify's public `products.json` for the `watches` collection and compares each
-available variant's `price` against its `compare_at_price`. The deepest discount
-across a product's variants wins.
+Reads Shopify's public whole-store `products.json` and watches for four things:
+
+| Signal | Fires when |
+|---|---|
+| **restock** | a product named in `WATCHLIST` is available again |
+| **silent sale** | a product the store tags `silent_sale_product` is available again |
+| **discount** | `compare_at_price` exceeds `price` by at least the threshold |
+| **price drop** | the price itself falls, even with no `compare_at_price` set |
+
+At most one alert per product per cycle, urgent signals first. Sold-out products never
+alert — the store leaves stale discounts, sometimes a ₹0 price, on things you cannot buy.
+
+**It polls the whole store, not a collection.** Shopify drops out-of-stock products
+from collection feeds entirely, and over 700 watches sit outside
+`/collections/watches` regardless, so a collection feed can see neither restocks nor
+every sale.
+
+**Price drops are tracked separately from discounts** because the store runs sales
+that never populate `compare_at_price`. A discount-only watcher cannot see those at
+all.
 
 It deliberately does **not** scrape the store's own "30% Off Or More" filter. That
 facet defines exactly one bucket, so it cannot express a lower threshold, and if the
 underlying metafield were ever renamed the filtered page would silently return either
 the entire catalogue or nothing at all — indistinguishable from "no sales this month".
-Comparing prices directly fails loudly instead.
 
 Each poll sends `If-None-Match` per page. An unchanged catalogue costs ~0 bytes, which
 keeps a once-a-minute poll a polite neighbour. Every 30th cycle refetches
@@ -69,9 +85,9 @@ python3 -m casio_watch --loop    # poll forever
 | `NTFY_SERVER` | `https://ntfy.sh` | point at a self-hosted ntfy |
 | `MIN_DISCOUNT_PCT` | `10` | alert threshold |
 | `POLL_SECONDS` | `60` | minimum 30 |
-| `COLLECTION` | `watches` | any collection handle on the store |
-| `STATE_PATH` | `/data/state.json` | seen deals and per-page ETags |
-| `SEED_SILENT` | `false` | suppress the first-run summary |
+| `PRODUCT_TYPES` | `Watches` | comma-separated types to watch; `*` for everything |
+| `WATCHLIST` | *(empty)* | exact product titles to alert on when back in stock |
+| `STATE_PATH` | `/data/state.json` | last-seen prices, stock and per-page ETags |
 | `HEARTBEAT_PATH` | `/tmp/heartbeat` | liveness probe target |
 | `LOG_LEVEL` | `INFO` | |
 

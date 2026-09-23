@@ -10,14 +10,20 @@ from casio_watch.notify import NotifyError
 from casio_watch.state import State
 from casio_watch.store import FetchError
 
-DISCOUNTED = {
-    "id": 1, "title": "GMA-P2110SC-4A", "handle": "gma-p2110sc-4a",
-    "variants": [{"available": True, "price": "6646.50", "compare_at_price": "9495.00"}],
-}
-DEEPER = {
-    "id": 1, "title": "GMA-P2110SC-4A", "handle": "gma-p2110sc-4a",
-    "variants": [{"available": True, "price": "4747.50", "compare_at_price": "9495.00"}],
-}
+
+def watch(handle, title, price, compare_at=None, available=True, tags=()):
+    return {"id": 1, "title": title, "handle": handle, "product_type": "Watches",
+            "tags": list(tags),
+            "variants": [{"available": available, "price": price,
+                          "compare_at_price": compare_at}]}
+
+
+FULL_PRICE = watch("gma", "GMA-P2110SC-4A", "9495.00", "9495.00")
+DISCOUNTED = watch("gma", "GMA-P2110SC-4A", "6646.50", "9495.00")
+SILENT_OOS = watch("mtp", "MTP-VT04L-8E", "3495.00", None, available=False,
+                   tags=["silent_sale_product"])
+SILENT_BACK = watch("mtp", "MTP-VT04L-8E", "1048.00", None, available=True,
+                    tags=["silent_sale_product"])
 
 
 class FakeResponse(io.BytesIO):
@@ -29,12 +35,8 @@ class FakeResponse(io.BytesIO):
     def headers(self):
         return {"ETag": self._etag} if self._etag else {}
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self.close()
-        return False
+    def __enter__(self): return self
+    def __exit__(self, *exc): self.close(); return False
 
 
 class FakeOpener:
@@ -44,43 +46,38 @@ class FakeOpener:
 
     def __call__(self, request, timeout=None):
         self.requests.append(request)
-        result = self.responses.pop(0)
-        if isinstance(result, Exception):
-            raise result
-        return result
+        r = self.responses.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
 
     def posted(self):
         return [r for r in self.requests if r.get_method() == "POST"]
 
 
 def cfg_for(tmp_path, **overrides):
-    return load_config({
-        "NTFY_TOPIC": "t",
-        "STATE_PATH": str(tmp_path / "state.json"),
-        "HEARTBEAT_PATH": str(tmp_path / "beat"),
-        **overrides,
-    })
+    return load_config({"NTFY_TOPIC": "t",
+                        "STATE_PATH": str(tmp_path / "state.json"),
+                        "HEARTBEAT_PATH": str(tmp_path / "beat"),
+                        **overrides})
 
 
-def noop_sleep(_seconds):
+def noop_sleep(_s):
     return None
 
 
-def test_self_test_posts_a_silent_startup_ping(tmp_path):
-    opener = FakeOpener([FakeResponse()])
-    self_test(cfg_for(tmp_path), opener, noop_sleep)
-    assert len(opener.requests) == 1
-    request = opener.requests[0]
-    assert request.get_method() == "POST"
-    assert request.get_header("Priority") == "min"
+def catalogue(*products, etag='W/"p1"'):
+    """One page of products followed by the empty page that ends pagination."""
+    return [FakeResponse({"products": list(products)}, etag=etag),
+            FakeResponse({"products": []})]
 
 
-def test_self_test_ping_names_the_collection_and_threshold(tmp_path):
+# --- self test --------------------------------------------------------------
+
+def test_self_test_posts_a_silent_ping(tmp_path):
     opener = FakeOpener([FakeResponse()])
     self_test(cfg_for(tmp_path), opener, noop_sleep)
-    body = opener.requests[0].data.decode("utf-8")
-    assert "watches" in body
-    assert "10%" in body
+    assert opener.requests[0].get_header("Priority") == "min"
 
 
 def test_self_test_raises_when_publishing_is_blocked(tmp_path):
@@ -89,95 +86,81 @@ def test_self_test_raises_when_publishing_is_blocked(tmp_path):
         self_test(cfg_for(tmp_path), opener, noop_sleep)
 
 
-def test_first_run_alerts_and_records(tmp_path):
+# --- cycles -----------------------------------------------------------------
+
+def test_first_run_records_without_alerting(tmp_path):
     state = State()
-    opener = FakeOpener([
-        FakeResponse({"products": [DISCOUNTED]}, etag='W/"p1"'),
-        FakeResponse({"products": []}),
-        FakeResponse(),
-    ])
-    changed = run_cycle(cfg_for(tmp_path), state, opener, noop_sleep)
-    assert changed is True
-    assert state.seen == {"gma-p2110sc-4a": 30}
+    opener = FakeOpener(catalogue(DISCOUNTED))
+    assert run_cycle(cfg_for(tmp_path), state, opener, noop_sleep) is True
+    assert opener.posted() == []
+    assert state.prices["gma"] == 6646.50
+    assert state.seen["gma"] == 30
+
+
+def test_new_discount_after_baseline_alerts(tmp_path):
+    state = State(prices={"gma": 9495.00}, stock={"gma": True}, seen={})
+    opener = FakeOpener(catalogue(DISCOUNTED) + [FakeResponse()])
+    run_cycle(cfg_for(tmp_path), state, opener, noop_sleep)
     assert len(opener.posted()) == 1
+    assert state.seen["gma"] == 30
 
 
-def test_seed_silent_records_without_alerting(tmp_path):
-    state = State()
-    opener = FakeOpener([
-        FakeResponse({"products": [DISCOUNTED]}, etag='W/"p1"'),
-        FakeResponse({"products": []}),
-    ])
-    run_cycle(cfg_for(tmp_path, SEED_SILENT="true"), state, opener, noop_sleep)
-    assert state.seen == {"gma-p2110sc-4a": 30}
+def test_silent_sale_restock_alerts_urgently(tmp_path):
+    state = State(prices={"mtp": 3495.00}, stock={"mtp": False}, silent={"mtp": False})
+    opener = FakeOpener(catalogue(SILENT_BACK) + [FakeResponse()])
+    run_cycle(cfg_for(tmp_path), state, opener, noop_sleep)
+    posted = opener.posted()
+    assert len(posted) == 1
+    assert posted[0].get_header("Priority") == "urgent"
+
+
+def test_watchlist_restock_alerts(tmp_path):
+    state = State(prices={"f91": 1295.0}, stock={"f91": False})
+    back = watch("f91", "F-91W-1", "1295.00", None, available=True)
+    opener = FakeOpener(catalogue(back) + [FakeResponse()])
+    run_cycle(cfg_for(tmp_path, WATCHLIST="F-91W-1"), state, opener, noop_sleep)
+    assert opener.posted()[0].get_header("Title") == "Back in stock: F-91W-1"
+
+
+def test_sold_out_discount_does_not_alert(tmp_path):
+    state = State(prices={"z": 10000.0}, stock={"z": True})
+    dead = watch("z", "Sold Out Bargain", "0.00", "10000.00", available=False)
+    opener = FakeOpener(catalogue(dead))
+    run_cycle(cfg_for(tmp_path), state, opener, noop_sleep)
     assert opener.posted() == []
 
 
 def test_unchanged_catalogue_skips_cycle(tmp_path):
-    state = State(seen={"gma-p2110sc-4a": 30}, etags={"1": 'W/"p1"'})
+    state = State(prices={"gma": 6646.5}, etags={"1": 'W/"p1"'})
     opener = FakeOpener([HTTPError("u", 304, "nm", {}, None)])
-    changed = run_cycle(cfg_for(tmp_path), state, opener, noop_sleep)
-    assert changed is False
+    assert run_cycle(cfg_for(tmp_path), state, opener, noop_sleep) is False
     assert opener.posted() == []
 
 
-def test_deeper_discount_triggers_alert(tmp_path):
-    state = State(seen={"gma-p2110sc-4a": 30})
-    opener = FakeOpener([
-        FakeResponse({"products": [DEEPER]}, etag='W/"p1"'),
-        FakeResponse({"products": []}),
-        FakeResponse(),
-    ])
+def test_notify_failure_withholds_so_it_retries(tmp_path):
+    state = State(prices={"gma": 9495.00}, stock={"gma": True})
+    opener = FakeOpener(catalogue(DISCOUNTED) + [URLError("down")] * 3)
     run_cycle(cfg_for(tmp_path), state, opener, noop_sleep)
-    assert state.seen == {"gma-p2110sc-4a": 50}
-    assert len(opener.posted()) == 1
+    assert state.prices["gma"] == 9495.00, "price must not advance while the alert is unsent"
 
 
-def test_expired_deal_is_dropped_from_state(tmp_path):
-    state = State(seen={"gone-watch": 30})
-    opener = FakeOpener([
-        FakeResponse({"products": []}, etag='W/"p1"'),
-    ])
-    run_cycle(cfg_for(tmp_path), state, opener, noop_sleep)
-    assert state.seen == {}
-    assert opener.posted() == []
-
-
-def test_notify_failure_withholds_handle_so_it_retries(tmp_path):
-    state = State()
-    opener = FakeOpener([
-        FakeResponse({"products": [DISCOUNTED]}, etag='W/"p1"'),
-        FakeResponse({"products": []}),
-        URLError("ntfy down"), URLError("ntfy down"), URLError("ntfy down"),
-    ])
-    run_cycle(cfg_for(tmp_path), state, opener, noop_sleep)
-    assert state.seen == {}
-
-
-def test_heartbeat_written_on_successful_cycle(tmp_path):
-    state = State()
-    opener = FakeOpener([
-        FakeResponse({"products": []}, etag='W/"p1"'),
-    ])
-    run_cycle(cfg_for(tmp_path), state, opener, noop_sleep)
+def test_heartbeat_written_each_cycle(tmp_path):
+    opener = FakeOpener(catalogue(FULL_PRICE))
+    run_cycle(cfg_for(tmp_path), State(), opener, noop_sleep)
     assert (tmp_path / "beat").exists()
 
 
+# --- entry point ------------------------------------------------------------
+
 def test_main_once_returns_zero_and_persists_state(tmp_path, monkeypatch):
-    opener = FakeOpener([
-        FakeResponse(),                                              # startup ping
-        FakeResponse({"products": [DISCOUNTED]}, etag='W/"p1"'),
-        FakeResponse({"products": []}),
-        FakeResponse(),                                              # deal alert
-    ])
+    opener = FakeOpener([FakeResponse()] + catalogue(DISCOUNTED))
     monkeypatch.setattr("casio_watch.__main__.urlopen", opener)
     monkeypatch.setenv("NTFY_TOPIC", "t")
     monkeypatch.setenv("STATE_PATH", str(tmp_path / "state.json"))
     monkeypatch.setenv("HEARTBEAT_PATH", str(tmp_path / "beat"))
-
     assert main(["--once"]) == 0
     saved = json.loads((tmp_path / "state.json").read_text())
-    assert saved["seen"] == {"gma-p2110sc-4a": 30}
+    assert saved["prices"]["gma"] == 6646.50
 
 
 def test_main_once_returns_one_on_fetch_failure(tmp_path, monkeypatch):
@@ -186,20 +169,16 @@ def test_main_once_returns_one_on_fetch_failure(tmp_path, monkeypatch):
     monkeypatch.setenv("NTFY_TOPIC", "t")
     monkeypatch.setenv("STATE_PATH", str(tmp_path / "state.json"))
     monkeypatch.setenv("HEARTBEAT_PATH", str(tmp_path / "beat"))
-
     assert main(["--once"]) == 1
 
 
-def test_main_returns_one_when_startup_ping_is_blocked(tmp_path, monkeypatch):
+def test_main_returns_one_when_startup_ping_blocked(tmp_path, monkeypatch):
     opener = FakeOpener([URLError("egress blocked")] * 3)
     monkeypatch.setattr("casio_watch.__main__.urlopen", opener)
-    # main() calls self_test without a sleep argument, so the retry delay comes from
-    # the default bound at definition time; shorten the delays themselves instead.
     monkeypatch.setattr("casio_watch.notify.RETRY_DELAYS", (0, 0, 0))
     monkeypatch.setenv("NTFY_TOPIC", "t")
     monkeypatch.setenv("STATE_PATH", str(tmp_path / "state.json"))
     monkeypatch.setenv("HEARTBEAT_PATH", str(tmp_path / "beat"))
-
     assert main(["--once"]) == 1
 
 
@@ -210,52 +189,46 @@ def test_main_returns_two_on_config_error(monkeypatch, capsys):
 
 
 class LoopBreak(Exception):
-    """Escape hatch to terminate the otherwise-infinite poll loop under test."""
+    pass
 
 
-def test_loop_backs_off_progressively_on_repeated_fetch_failures(tmp_path, monkeypatch):
+def test_loop_backs_off_progressively(tmp_path, monkeypatch):
     from casio_watch import __main__ as entry
-
     delays = []
 
-    def boom(*args, **kwargs):
+    def boom(*a, **k):
         raise FetchError("store down")
 
-    def record_sleep(seconds):
+    def record(seconds):
         delays.append(seconds)
         if len(delays) == 5:
             raise LoopBreak
 
     monkeypatch.setattr(entry, "run_cycle", boom)
-    monkeypatch.setattr(entry.time, "sleep", record_sleep)
-
+    monkeypatch.setattr(entry.time, "sleep", record)
     with pytest.raises(LoopBreak):
         entry._loop(cfg_for(tmp_path), State())
-
     assert delays == [60, 120, 240, 300, 300]
 
 
-def test_loop_resets_backoff_after_a_successful_cycle(tmp_path, monkeypatch):
+def test_loop_resets_backoff_after_success(tmp_path, monkeypatch):
     from casio_watch import __main__ as entry
-
     delays = []
     outcomes = [FetchError("down"), FetchError("down"), None, FetchError("down")]
 
-    def flaky(*args, **kwargs):
-        result = outcomes.pop(0)
-        if isinstance(result, Exception):
-            raise result
+    def flaky(*a, **k):
+        r = outcomes.pop(0)
+        if isinstance(r, Exception):
+            raise r
         return False
 
-    def record_sleep(seconds):
+    def record(seconds):
         delays.append(seconds)
         if len(delays) == 4:
             raise LoopBreak
 
     monkeypatch.setattr(entry, "run_cycle", flaky)
-    monkeypatch.setattr(entry.time, "sleep", record_sleep)
-
+    monkeypatch.setattr(entry.time, "sleep", record)
     with pytest.raises(LoopBreak):
         entry._loop(cfg_for(tmp_path), State())
-
     assert delays == [60, 120, 60, 60]

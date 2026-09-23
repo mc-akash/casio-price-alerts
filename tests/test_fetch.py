@@ -10,11 +10,11 @@ from casio_watch.store import FetchError, fetch_all, fetch_page
 CFG = load_config({"NTFY_TOPIC": "t", "MIN_DISCOUNT_PCT": "10"})
 
 DISCOUNTED = {
-    "id": 1, "title": "GMA-P2110SC-4A", "handle": "gma-p2110sc-4a",
+    "id": 1, "title": "GMA-P2110SC-4A", "handle": "gma-p2110sc-4a", "product_type": "Watches",
     "variants": [{"available": True, "price": "6646.50", "compare_at_price": "9495.00"}],
 }
 FULL_PRICE = {
-    "id": 2, "title": "GA-2100RL-1A", "handle": "ga-2100rl-1a",
+    "id": 2, "title": "GA-2100RL-1A", "handle": "ga-2100rl-1a", "product_type": "Watches",
     "variants": [{"available": True, "price": "9195.00", "compare_at_price": "9195.00"}],
 }
 
@@ -116,14 +116,14 @@ def test_fetch_all_first_run_crawls_until_empty_page():
         FakeResponse({"products": []}, etag='W/"p2"'),
     ])
     result = fetch_all(CFG, {}, opener)
-    assert [d.handle for d in result.deals] == ["gma-p2110sc-4a"]
+    assert sorted(p.handle for p in result.products) == ["ga-2100rl-1a", "gma-p2110sc-4a"]
     assert result.etags == {"1": 'W/"p1"'}
 
 
 def test_fetch_all_skips_cycle_when_all_pages_unchanged():
     opener = FakeOpener([http_error(304)])
     result = fetch_all(CFG, {"1": 'W/"p1"'}, opener)
-    assert result.deals is None
+    assert result.products is None
     assert result.etags == {"1": 'W/"p1"'}
     assert len(opener.requests) == 1
 
@@ -135,7 +135,7 @@ def test_fetch_all_refetches_everything_when_a_page_changed():
         FakeResponse({"products": []}, etag='W/"p2"'),
     ])
     result = fetch_all(CFG, {"1": 'W/"old"'}, opener)
-    assert [d.handle for d in result.deals] == ["gma-p2110sc-4a"]
+    assert [p.handle for p in result.products] == ["gma-p2110sc-4a"]
     assert result.etags == {"1": 'W/"new"'}
 
 
@@ -145,7 +145,7 @@ def test_fetch_all_force_full_skips_the_probe():
         FakeResponse({"products": []}),
     ])
     result = fetch_all(CFG, {"1": 'W/"p1"'}, opener, force_full=True)
-    assert result.deals is not None
+    assert result.products is not None
     assert len(opener.requests) == 2
 
 
@@ -159,4 +159,4 @@ def test_fetch_all_stops_at_max_pages():
     opener = FakeOpener([FakeResponse({"products": [DISCOUNTED]}) for _ in range(25)])
     result = fetch_all(CFG, {}, opener)
     assert len(opener.requests) == 20
-    assert result.deals is not None
+    assert result.products is not None

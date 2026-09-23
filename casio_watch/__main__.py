@@ -11,7 +11,8 @@ from urllib.request import urlopen
 from casio_watch import notify
 from casio_watch.config import ConfigError, load_config
 from casio_watch.notify import NotifyError
-from casio_watch.state import diff_deals, load_state, save_state
+from casio_watch import alerts as alerting
+from casio_watch.state import load_state, save_state
 from casio_watch.store import FetchError, fetch_all
 
 log = logging.getLogger("casio_watch")
@@ -41,32 +42,19 @@ def _touch(path) -> None:
 
 def run_cycle(cfg, state, opener=urlopen, sleep=time.sleep, force_full: bool = False) -> bool:
     """Poll once. Returns True when state changed and should be persisted."""
-    is_seed = not state.seen and not state.etags
-
     result = fetch_all(cfg, state.etags, opener, force_full=force_full)
-    if result.deals is None:
+    if result.products is None:
         _touch(cfg.heartbeat_path)
         return False
 
     state.etags = result.etags
-    diff = diff_deals(state.seen, result.deals)
 
-    for handle in diff.gone:
-        state.seen.pop(handle, None)
-        log.info("deal ended: %s", handle)
+    found = alerting.compute(cfg, result.products, state)
+    withheld = notify.send(cfg, found, opener=opener, sleep=sleep) if found else set()
+    if withheld:
+        log.error("withholding %d undelivered alert(s) for retry next cycle", len(withheld))
 
-    withheld: set[str] = set()
-    alertable = diff.alertable
-    if alertable and not (is_seed and cfg.seed_silent):
-        try:
-            notify.send(cfg, alertable, opener=opener, sleep=sleep)
-        except NotifyError as exc:
-            log.error("%s; withholding %d deal(s) for retry next cycle", exc, len(alertable))
-            withheld = {d.handle for d in alertable}
-
-    for deal in result.deals:
-        if deal.handle not in withheld:
-            state.seen[deal.handle] = deal.pct
+    alerting.apply_state(cfg, state, result.products, withheld)
 
     _touch(cfg.heartbeat_path)
     return True
@@ -125,8 +113,10 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         return 0
 
-    log.info("polling %s every %ds at >=%d%% off", cfg.collection_url,
-             cfg.poll_seconds, cfg.min_discount_pct)
+    scope = ", ".join(cfg.product_types) if cfg.product_types else "all product types"
+    log.info("polling the whole store (%s) every %ds at >=%d%%, watchlist: %s",
+             scope, cfg.poll_seconds, cfg.min_discount_pct,
+             ", ".join(cfg.watchlist) or "none")
     return _loop(cfg, state)
 
 

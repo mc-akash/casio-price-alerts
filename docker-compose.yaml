@@ -22,7 +22,12 @@ services:
       NTFY_SERVER: https://ntfy.sh
       MIN_DISCOUNT_PCT: "10"
       POLL_SECONDS: "60"
-      COLLECTION: watches
+
+      # Whole store is polled; this narrows it. "*" means every type.
+      PRODUCT_TYPES: Watches
+
+      # Exact product titles to alert on the moment they are back in stock.
+      WATCHLIST: "F-91W-1,F-91WF-1ADF,F-91WF-2ADF,GBD-200UU-1"
       LOG_LEVEL: INFO
       STATE_PATH: /data/state.json
       HEARTBEAT_PATH: /tmp/heartbeat

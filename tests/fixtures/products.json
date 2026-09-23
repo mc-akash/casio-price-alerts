@@ -5,80 +5,214 @@
       "title": "GA-2100RL-1A",
       "handle": "casio-g-shock-ga-2100rl-1adr-black-analog-digital-mens-watch",
       "variants": [
-        {"id": 1, "sku": "G1686", "available": true, "price": "9195.00", "compare_at_price": "9195.00"}
-      ]
+        {
+          "id": 1,
+          "sku": "G1686",
+          "available": true,
+          "price": "9195.00",
+          "compare_at_price": "9195.00"
+        }
+      ],
+      "product_type": "Watches",
+      "tags": []
     },
     {
       "id": 2222,
       "title": "GMA-P2110SC-4A",
       "handle": "gma-p2110sc-4a",
       "variants": [
-        {"id": 2, "sku": "G1700", "available": true, "price": "6646.50", "compare_at_price": "9495.00"}
-      ]
+        {
+          "id": 2,
+          "sku": "G1700",
+          "available": true,
+          "price": "6646.50",
+          "compare_at_price": "9495.00"
+        }
+      ],
+      "product_type": "Watches",
+      "tags": []
     },
     {
       "id": 3333,
       "title": "GM-2110D-3A",
       "handle": "casio-g-shock-gm-2110d-3adr-green-analog-digital-mens-watch",
       "variants": [
-        {"id": 3, "sku": "G1701", "available": true, "price": "15396.50", "compare_at_price": "21995.00"}
-      ]
+        {
+          "id": 3,
+          "sku": "G1701",
+          "available": true,
+          "price": "15396.50",
+          "compare_at_price": "21995.00"
+        }
+      ],
+      "product_type": "Watches",
+      "tags": []
     },
     {
       "id": 4444,
       "title": "No Compare Price",
       "handle": "no-compare-price",
       "variants": [
-        {"id": 4, "sku": "X1", "available": true, "price": "5000.00", "compare_at_price": null}
-      ]
+        {
+          "id": 4,
+          "sku": "X1",
+          "available": true,
+          "price": "5000.00",
+          "compare_at_price": null
+        }
+      ],
+      "product_type": "Watches",
+      "tags": []
     },
     {
       "id": 5555,
       "title": "Multi Variant",
       "handle": "multi-variant",
       "variants": [
-        {"id": 5, "sku": "X2", "available": true, "price": "9000.00", "compare_at_price": "10000.00"},
-        {"id": 6, "sku": "X3", "available": true, "price": "5000.00", "compare_at_price": "10000.00"}
-      ]
+        {
+          "id": 5,
+          "sku": "X2",
+          "available": true,
+          "price": "9000.00",
+          "compare_at_price": "10000.00"
+        },
+        {
+          "id": 6,
+          "sku": "X3",
+          "available": true,
+          "price": "5000.00",
+          "compare_at_price": "10000.00"
+        }
+      ],
+      "product_type": "Watches",
+      "tags": []
     },
     {
       "id": 6666,
       "title": "Deep But Sold Out",
       "handle": "deep-but-sold-out",
       "variants": [
-        {"id": 7, "sku": "X4", "available": false, "price": "1000.00", "compare_at_price": "10000.00"},
-        {"id": 8, "sku": "X5", "available": true, "price": "8800.00", "compare_at_price": "10000.00"}
-      ]
+        {
+          "id": 7,
+          "sku": "X4",
+          "available": false,
+          "price": "1000.00",
+          "compare_at_price": "10000.00"
+        },
+        {
+          "id": 8,
+          "sku": "X5",
+          "available": true,
+          "price": "8800.00",
+          "compare_at_price": "10000.00"
+        }
+      ],
+      "product_type": "Watches",
+      "tags": []
     },
     {
       "id": 7777,
       "title": "Below Threshold",
       "handle": "below-threshold",
       "variants": [
-        {"id": 9, "sku": "X6", "available": true, "price": "9500.00", "compare_at_price": "10000.00"}
-      ]
+        {
+          "id": 9,
+          "sku": "X6",
+          "available": true,
+          "price": "9500.00",
+          "compare_at_price": "10000.00"
+        }
+      ],
+      "product_type": "Watches",
+      "tags": []
     },
     {
       "id": 8888,
       "title": "Price Above Compare",
       "handle": "price-above-compare",
       "variants": [
-        {"id": 10, "sku": "X7", "available": true, "price": "12000.00", "compare_at_price": "10000.00"}
-      ]
+        {
+          "id": 10,
+          "sku": "X7",
+          "available": true,
+          "price": "12000.00",
+          "compare_at_price": "10000.00"
+        }
+      ],
+      "product_type": "Watches",
+      "tags": []
     },
     {
       "id": 9999,
       "title": "Zero Compare",
       "handle": "zero-compare",
       "variants": [
-        {"id": 11, "sku": "X8", "available": true, "price": "0.00", "compare_at_price": "0.00"}
-      ]
+        {
+          "id": 11,
+          "sku": "X8",
+          "available": true,
+          "price": "0.00",
+          "compare_at_price": "0.00"
+        }
+      ],
+      "product_type": "Watches",
+      "tags": []
     },
     {
       "id": 10101,
       "title": "No Variants",
       "handle": "no-variants",
-      "variants": []
+      "variants": [],
+      "product_type": "Watches",
+      "tags": []
+    },
+    {
+      "id": 20001,
+      "title": "F-91W-1",
+      "handle": "casio-f-91w-1q-black-digital-unisex-watch",
+      "product_type": "Watches",
+      "tags": [],
+      "variants": [
+        {
+          "id": 900,
+          "available": false,
+          "price": "1295.00",
+          "compare_at_price": "1295.00"
+        }
+      ]
+    },
+    {
+      "id": 20002,
+      "title": "MTP-VT04L-8E",
+      "handle": "mtp-vt04l-8e",
+      "product_type": "Watches",
+      "tags": [
+        "CASIO-MENS-METAL",
+        "silent_sale_product"
+      ],
+      "variants": [
+        {
+          "id": 901,
+          "available": false,
+          "price": "3495.00",
+          "compare_at_price": null
+        }
+      ]
+    },
+    {
+      "id": 20003,
+      "title": "FX-991EX",
+      "handle": "fx-991ex",
+      "product_type": "Calculators",
+      "tags": [],
+      "variants": [
+        {
+          "id": 902,
+          "available": true,
+          "price": "1500.00",
+          "compare_at_price": "3000.00"
+        }
+      ]
     }
   ]
 }

@@ -7,12 +7,12 @@ import time
 import urllib.request
 from urllib.error import HTTPError, URLError
 
-from casio_watch.store import Deal
 
 log = logging.getLogger(__name__)
 
 MAX_LISTED = 10
 MAX_ACTIONS = 3
+KIND_ORDER = ("restock", "silent_sale", "discount", "price_drop")
 RETRY_DELAYS = (2, 6, 18)
 TIMEOUT_SECONDS = 15
 
@@ -21,47 +21,49 @@ class NotifyError(Exception):
     """Raised when a notification could not be delivered after every retry."""
 
 
-def _rupees(amount: float) -> str:
-    return f"₹{amount:,.0f}"
-
-
-def format_message(deals: list[Deal], collection_url: str) -> tuple[str, str, str]:
-    """Build the (title, body, click_url) triple for a batch of deals."""
-    ranked = sorted(deals, key=lambda d: (-d.pct, d.title))
-
-    noun = "deal" if len(ranked) == 1 else "deals"
-    title = f"{len(ranked)} new Casio {noun}"
-
-    lines = [
-        f"{d.title} — {d.pct}% off {_rupees(d.price)} (was {_rupees(d.compare_at)})"
-        for d in ranked[:MAX_LISTED]
-    ]
-    if len(ranked) > MAX_LISTED:
-        lines.append(f"+{len(ranked) - MAX_LISTED} more")
-
-    # Always the deepest-discounted product, never the collection page: the store's
-    # only discount facet is "30% Off Or More", so no collection URL can represent a
-    # lower threshold, and the unfiltered page strands the reader among 465 watches.
-    return title, "\n".join(lines), ranked[0].url
-
-
-def format_actions(deals: list[Deal]) -> str | None:
-    """Build ntfy view buttons, one per deal, so a batch reaches every watch.
-
-    A single deal needs none - the notification's own click target already goes there.
-    """
-    if len(deals) < 2:
-        return None
-
-    ranked = sorted(deals, key=lambda d: (-d.pct, d.title))
-    return "; ".join(
-        f"view, {_action_label(d.title)}, {d.url}" for d in ranked[:MAX_ACTIONS]
-    )
+# singular title, plural label, ntfy priority, ntfy tag
+KINDS = {
+    "restock":     ("Back in stock", "back in stock",    "urgent", "rotating_light"),
+    "silent_sale": ("Silent sale",   "silent sale items", "urgent", "zap"),
+    "discount":    ("New deal",      "new Casio deals",  "high",   "fire"),
+    "price_drop":  ("Price drop",    "price drops",      "high",   "chart_with_downwards_trend"),
+}
 
 
 def _action_label(title: str) -> str:
     """Strip the separators ntfy uses to delimit actions and their fields."""
     return " ".join(title.replace(",", " ").replace(";", " ").split())
+
+
+def format_actions(alerts: list) -> str | None:
+    """Build ntfy view buttons so a batch can reach every product.
+
+    A single alert needs none - the notification's own click target already goes there.
+    """
+    if len(alerts) < 2:
+        return None
+    return "; ".join(
+        f"view, {_action_label(a.product.title)}, {a.product.url}"
+        for a in alerts[:MAX_ACTIONS]
+    )
+
+
+def format_group(kind: str, alerts: list) -> tuple[str, str, str]:
+    """Build the (title, body, click_url) triple for one kind of alert."""
+    singular, plural, _, _ = KINDS[kind]
+
+    if len(alerts) == 1:
+        title = f"{singular}: {alerts[0].product.title}"
+    else:
+        title = f"{len(alerts)} {plural}"
+
+    lines = [f"{a.product.title} - {a.detail}" for a in alerts[:MAX_LISTED]]
+    if len(alerts) > MAX_LISTED:
+        lines.append(f"+{len(alerts) - MAX_LISTED} more")
+
+    # Always a product page, never a collection: the store's only discount facet is
+    # "30% Off Or More", so no collection URL can represent what we actually alert on.
+    return title, "\n".join(lines), alerts[0].product.url
 
 
 def _post(cfg, body: str, headers: dict[str, str], opener, sleep) -> None:
@@ -84,18 +86,39 @@ def _post(cfg, body: str, headers: dict[str, str], opener, sleep) -> None:
     raise NotifyError(f"delivery failed after {len(RETRY_DELAYS)} attempts: {last_error}")
 
 
-def send(cfg, deals: list[Deal], opener=urllib.request.urlopen, sleep=time.sleep) -> None:
-    """POST one batched deal notification."""
-    if not deals:
-        return
+def send(cfg, alerts: list, opener=urllib.request.urlopen,
+         sleep=time.sleep) -> set[str]:
+    """Publish one push per alert kind. Returns handles that could not be delivered.
 
-    title, body, click = format_message(deals, cfg.collection_url)
-    headers = {"Title": title, "Priority": "high", "Tags": "fire", "Click": click}
-    actions = format_actions(deals)
-    if actions:
-        headers["Actions"] = actions
-    _post(cfg, body, headers, opener, sleep)
-    log.info("notified: %s", title)
+    Grouping by kind keeps a restock urgent without making every discount urgent too,
+    while still collapsing a store-wide sale into a single notification.
+    """
+    if not alerts:
+        return set()
+
+    failed: set[str] = set()
+    for kind in KIND_ORDER:
+        group = [a for a in alerts if a.kind == kind]
+        if not group:
+            continue
+
+        group = sorted(group, key=lambda a: a.product.title)
+        title, body, click = format_group(kind, group)
+        _, _, priority, tag = KINDS[kind]
+
+        headers = {"Title": title, "Priority": priority, "Tags": tag, "Click": click}
+        actions = format_actions(group)
+        if actions:
+            headers["Actions"] = actions
+
+        try:
+            _post(cfg, body, headers, opener, sleep)
+            log.info("notified: %s", title)
+        except NotifyError as exc:
+            log.error("could not deliver %s alert(s): %s", kind, exc)
+            failed.update(a.product.handle for a in group)
+
+    return failed
 
 
 def ping(cfg, opener=urllib.request.urlopen, sleep=time.sleep) -> None:
@@ -104,8 +127,9 @@ def ping(cfg, opener=urllib.request.urlopen, sleep=time.sleep) -> None:
     Priority "min" lands in the ntfy app's history without a sound or banner, so
     restarts stay visible without being noisy.
     """
+    scope = ", ".join(cfg.product_types) if cfg.product_types else "the whole store"
     body = (
-        f"casio-price-alerts started · watching {cfg.collection} "
+        f"casio-price-alerts started · watching {scope} "
         f"at >={cfg.min_discount_pct}% off, every {cfg.poll_seconds}s"
     )
     _post(cfg, body, {"Title": "Watcher online", "Priority": "min",
