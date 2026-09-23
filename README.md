@@ -125,6 +125,47 @@ the first cycle anyway.
 | 1 | self-test or poll failed |
 | 2 | configuration error |
 
-## Design
+## Deploying on a VM
 
-`docs/superpowers/specs/2026-09-23-casio-price-alerts-design.md`
+Builds from source on the target host. Needs Docker, git, outbound internet, and
+read access to this private repo.
+
+```bash
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER      # then log out and back in
+```
+
+Give the VM read-only access with a deploy key:
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/casio_deploy -N ""
+cat ~/.ssh/casio_deploy.pub        # add under repo Settings > Deploy keys
+```
+
+```bash
+cat >> ~/.ssh/config <<'EOF'
+Host github-casio
+  HostName github.com
+  User git
+  IdentityFile ~/.ssh/casio_deploy
+  IdentitiesOnly yes
+EOF
+chmod 600 ~/.ssh/config
+
+git clone git@github-casio:mc-akash/casio-price-alerts.git
+cd casio-price-alerts
+cp .env.example .env               # set NTFY_TOPIC
+docker compose up -d --build
+docker compose logs -f
+```
+
+`docker compose ps` should read `(healthy)` after ~90s. Update with
+`git pull && docker compose up -d --build`; the state volume survives rebuilds.
+
+| Symptom | Cause |
+|---|---|
+| exits code 2 | `NTFY_TOPIC` missing from `.env` |
+| exits code 1 at startup | cannot reach ntfy.sh — check egress or proxy |
+| `permission denied ... docker.sock` | not in `docker` group, or login session predates `usermod` |
+| healthy but silent | nothing discounted — normal; unchanged polls log at DEBUG |
+| repeat alerts after restart | state volume was removed (`down -v`) |
