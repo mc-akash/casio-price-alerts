@@ -86,12 +86,24 @@ def _price_drop(cfg, p: Product, state) -> Alert | None:
 
 
 def compute(cfg, products: list[Product], state) -> list[Alert]:
-    """Return at most one alert per product. Silent on the very first run."""
-    if _is_seed(state):
-        return []
+    """Return at most one alert per product.
+
+    A first run has no history, so the transition signals - restock, silent sale,
+    price drop - cannot be evaluated and stay silent. Discounts are different: they
+    are an absolute condition, visible without any prior state. Announcing them on a
+    seed matters because every restart with a fresh state volume is a first run, and
+    a restart is exactly when a deal may have appeared unseen.
+    """
+    seed = _is_seed(state)
 
     alerts = []
     for p in products:
+        if seed:
+            existing = _discount(cfg, p, state)
+            if existing is not None:
+                alerts.append(existing)
+            continue
+
         candidates = {
             "restock": _restock(cfg, p, state),
             "silent_sale": _silent_sale(p, state),

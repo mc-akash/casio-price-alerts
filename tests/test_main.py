@@ -88,13 +88,21 @@ def test_self_test_raises_when_publishing_is_blocked(tmp_path):
 
 # --- cycles -----------------------------------------------------------------
 
-def test_first_run_records_without_alerting(tmp_path):
+def test_first_run_announces_an_already_active_discount(tmp_path):
+    """A restart re-seeds; a deal that appeared during downtime must still surface."""
     state = State()
-    opener = FakeOpener(catalogue(DISCOUNTED))
+    opener = FakeOpener(catalogue(DISCOUNTED) + [FakeResponse()])
     assert run_cycle(cfg_for(tmp_path), state, opener, noop_sleep) is True
-    assert opener.posted() == []
+    assert len(opener.posted()) == 1
     assert state.prices["gma"] == 6646.50
     assert state.seen["gma"] == 30
+
+
+def test_first_run_is_silent_when_nothing_is_discounted(tmp_path):
+    state = State()
+    opener = FakeOpener(catalogue(FULL_PRICE))
+    run_cycle(cfg_for(tmp_path), state, opener, noop_sleep)
+    assert opener.posted() == []
 
 
 def test_new_discount_after_baseline_alerts(tmp_path):
@@ -153,7 +161,7 @@ def test_heartbeat_written_each_cycle(tmp_path):
 # --- entry point ------------------------------------------------------------
 
 def test_main_once_returns_zero_and_persists_state(tmp_path, monkeypatch):
-    opener = FakeOpener([FakeResponse()] + catalogue(DISCOUNTED))
+    opener = FakeOpener([FakeResponse()] + catalogue(DISCOUNTED) + [FakeResponse()])
     monkeypatch.setattr("casio_watch.__main__.urlopen", opener)
     monkeypatch.setenv("NTFY_TOPIC", "t")
     monkeypatch.setenv("STATE_PATH", str(tmp_path / "state.json"))

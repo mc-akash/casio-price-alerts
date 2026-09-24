@@ -21,9 +21,32 @@ def kinds(alerts):
 
 # --- seeding ----------------------------------------------------------------
 
-def test_first_run_records_without_alerting():
+def test_first_run_announces_discounts_that_already_exist():
+    """A restart takes a fresh seed. Staying silent strands an active deal forever."""
     state = State()
-    products = [prod("a", price=700, compare_at=1000), prod("b", "F-91W-1", available=False)]
+    products = [prod("edifice", "EFV-640L-2AV", price=5397.0, compare_at=8995.0)]
+    alerts = compute(CFG, products, state)
+    assert kinds(alerts) == ["discount"]
+
+
+def test_first_run_stays_quiet_about_undiscounted_products():
+    state = State()
+    products = [prod("a", price=1000.0, compare_at=1000.0), prod("b", "F-91W-1", available=False)]
+    assert compute(CFG, products, state) == []
+
+
+def test_first_run_ignores_sold_out_discounts():
+    state = State()
+    assert compute(CFG, [prod("z", price=1.0, compare_at=1000.0, available=False)], state) == []
+
+
+def test_first_run_cannot_claim_restock_or_silent_sale():
+    """Both are transitions. With no prior state there is no transition to report."""
+    state = State()
+    products = [
+        prod("f", "F-91W-1", available=True),
+        prod("m", "MTP-VT03D-7B", available=True, tags=["silent_sale_product"]),
+    ]
     assert compute(CFG, products, state) == []
 
 
