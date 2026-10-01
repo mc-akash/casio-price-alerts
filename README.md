@@ -7,8 +7,8 @@ The store runs unannounced sales, some of them short-lived, and offers no way to
 notified. This polls it every 5 minutes and alerts you through
 [ntfy](https://ntfy.sh).
 
-Standard library only — no runtime dependencies. Runs as a plain script, a systemd
-service, a Docker container, or a Kubernetes pod.
+One runtime dependency, [`curl_cffi`](https://github.com/lexiforest/curl_cffi). Runs as
+a plain script, a systemd service, a Docker container, or a Kubernetes pod.
 
 ## How it works
 
@@ -70,6 +70,7 @@ the process exits rather than polling uselessly.
 ## Running it directly
 
 ```bash
+python3 -m pip install -r requirements.txt
 export NTFY_TOPIC=your-topic
 export STATE_PATH=./state.json
 
@@ -133,6 +134,16 @@ nothing between alerts. Judge liveness from `(healthy)`, not log activity.
 | healthy but no alerts | nothing is discounted — normal |
 | repeat alerts after restart | state volume was removed |
 | `HTTP 429` warnings | store rate limit; raise `POLL_SECONDS` — the watcher backs off on its own |
+| `HTTP 429` from the first request, every time | the edge is rejecting the client's TLS fingerprint, not the rate — see below |
+
+### Why not urllib
+
+From a datacenter IP, Shopify's edge rejects Python's urllib with `429` on the very
+first request — any headers, any rate, even after an hour of silence. Current curl
+builds fare no better. It judges the TLS handshake, not the request, so the store is
+fetched through `curl_cffi` impersonating Chrome (`casio_watch/browser.py`). ntfy is
+still reached with urllib. From a home connection urllib works, which is why this
+only shows up once deployed.
 
 ## Tests
 

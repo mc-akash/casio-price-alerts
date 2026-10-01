@@ -1,0 +1,2 @@
+# Browser-fingerprint HTTP client; see casio_watch/browser.py for why urllib is not enough.
+curl_cffi==0.16.3

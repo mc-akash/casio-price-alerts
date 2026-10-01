@@ -9,6 +9,7 @@ import time
 from urllib.request import urlopen
 
 from casio_watch import notify
+from casio_watch.browser import browser_open
 from casio_watch.config import ConfigError, load_config
 from casio_watch.notify import NotifyError
 from casio_watch import alerts as alerting
@@ -49,9 +50,15 @@ def _touch(path, deadline: float) -> None:
         log.warning("could not write heartbeat: %s", exc)
 
 
-def run_cycle(cfg, state, opener=urlopen, sleep=time.sleep, force_full: bool = False) -> bool:
-    """Poll once. Returns True when state changed and should be persisted."""
-    result = fetch_all(cfg, state.etags, opener, force_full=force_full, sleep=sleep)
+def run_cycle(cfg, state, opener=urlopen, sleep=time.sleep, force_full: bool = False,
+              store_opener=None) -> bool:
+    """Poll once. Returns True when state changed and should be persisted.
+
+    opener publishes to ntfy; store_opener fetches the catalogue and defaults to
+    opener, so tests can script both through one fake.
+    """
+    result = fetch_all(cfg, state.etags, store_opener or opener, force_full=force_full,
+                       sleep=sleep)
     if result.products is None:
         return False
 
@@ -72,7 +79,8 @@ def _loop(cfg, state) -> int:
     while True:
         try:
             force_full = cycles % FULL_REFRESH_CYCLES == 0
-            if run_cycle(cfg, state, urlopen, force_full=force_full):
+            if run_cycle(cfg, state, urlopen, force_full=force_full,
+                         store_opener=browser_open):
                 save_state(cfg.state_path, state)
             failures = 0
             delay = cfg.poll_seconds
@@ -114,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.once:
         try:
-            if run_cycle(cfg, state, urlopen):
+            if run_cycle(cfg, state, urlopen, store_opener=browser_open):
                 save_state(cfg.state_path, state)
         except FetchError as exc:
             log.error("poll failed: %s", exc)

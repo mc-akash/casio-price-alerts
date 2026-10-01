@@ -3,6 +3,8 @@ FROM python:3.12-slim
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin app
 
 WORKDIR /app
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 COPY casio_watch/ ./casio_watch/
 
 # A fresh named volume inherits ownership from the image's directory, so /data must

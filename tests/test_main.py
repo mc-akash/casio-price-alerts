@@ -154,19 +154,33 @@ def test_notify_failure_withholds_so_it_retries(tmp_path):
 # --- entry point ------------------------------------------------------------
 
 def test_main_once_returns_zero_and_persists_state(tmp_path, monkeypatch):
-    opener = FakeOpener([FakeResponse()] + catalogue(DISCOUNTED) + [FakeResponse()])
-    monkeypatch.setattr("casio_watch.__main__.urlopen", opener)
+    """The store is fetched through the browser opener; ntfy keeps plain urlopen."""
+    ntfy = FakeOpener([FakeResponse(), FakeResponse()])
+    store = FakeOpener(catalogue(DISCOUNTED))
+    monkeypatch.setattr("casio_watch.__main__.urlopen", ntfy)
+    monkeypatch.setattr("casio_watch.__main__.browser_open", store)
     monkeypatch.setenv("NTFY_TOPIC", "t")
     monkeypatch.setenv("STATE_PATH", str(tmp_path / "state.json"))
     monkeypatch.setenv("HEARTBEAT_PATH", str(tmp_path / "beat"))
     assert main(["--once"]) == 0
     saved = json.loads((tmp_path / "state.json").read_text())
     assert saved["prices"]["gma"] == 6646.50
+    assert all("products.json" in r.full_url for r in store.requests)
+    assert len(ntfy.posted()) == 2, "startup ping plus the discount alert"
+
+
+def test_run_cycle_uses_store_opener_for_the_catalogue(tmp_path):
+    ntfy = FakeOpener([FakeResponse()])
+    store = FakeOpener(catalogue(DISCOUNTED))
+    run_cycle(cfg_for(tmp_path), State(), ntfy, noop_sleep, store_opener=store)
+    assert len(store.requests) == 1
+    assert len(ntfy.posted()) == 1
 
 
 def test_main_once_returns_one_on_fetch_failure(tmp_path, monkeypatch):
-    opener = FakeOpener([FakeResponse(), URLError("offline")])
+    opener = FakeOpener([FakeResponse()])
     monkeypatch.setattr("casio_watch.__main__.urlopen", opener)
+    monkeypatch.setattr("casio_watch.__main__.browser_open", FakeOpener([URLError("offline")]))
     monkeypatch.setenv("NTFY_TOPIC", "t")
     monkeypatch.setenv("STATE_PATH", str(tmp_path / "state.json"))
     monkeypatch.setenv("HEARTBEAT_PATH", str(tmp_path / "beat"))

@@ -9,6 +9,7 @@ import urllib.request
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 
+from casio_watch.browser import browser_open
 from casio_watch.config import PAGE_SIZE
 
 log = logging.getLogger(__name__)
@@ -140,7 +141,7 @@ class FetchResult:
     etags: dict[str, str]
 
 
-def fetch_page(cfg, page: int, etag: str | None, opener=urllib.request.urlopen) -> PageResult:
+def fetch_page(cfg, page: int, etag: str | None, opener=browser_open) -> PageResult:
     """Fetch one catalogue page, conditionally when an ETag is known."""
     request = urllib.request.Request(cfg.products_url(page))
     request.add_header("User-Agent", USER_AGENT)
@@ -195,7 +196,7 @@ def _crawl(cfg, opener) -> list[PageResult]:
     return pages
 
 
-def fetch_all(cfg, etags: dict[str, str], opener=urllib.request.urlopen,
+def fetch_all(cfg, etags: dict[str, str], opener=browser_open,
               force_full: bool = False, sleep=time.sleep) -> FetchResult:
     """Return the current catalogue, or FetchResult(products=None) when unchanged."""
     opener = _paced(opener, sleep)
