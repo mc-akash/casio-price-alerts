@@ -17,7 +17,10 @@ from casio_watch.store import FetchError, fetch_all
 
 log = logging.getLogger("casio_watch")
 
-BACKOFF = (60, 120, 240, 300)
+# Shopify's storefront limiter needs a long quiet spell to clear; a short capped
+# backoff re-trips it on every retry, so failures escalate to half an hour.
+BACKOFF = (60, 300, 900, 1800)
+MAX_DELAY_SECONDS = 3600
 FULL_REFRESH_CYCLES = 30
 
 
@@ -32,19 +35,24 @@ def self_test(cfg, opener=urlopen, sleep=time.sleep) -> None:
     notify.ping(cfg, opener, sleep)
 
 
-def _touch(path) -> None:
+def _touch(path, deadline: float) -> None:
+    """Record when the next cycle is due; the healthcheck fails once it is overdue.
+
+    A deadline rather than a last-seen time keeps a long backoff healthy: restarting
+    a container that is merely waiting out a rate limit would only reset the backoff
+    and hit the store again.
+    """
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(str(time.time()))
+        path.write_text(str(deadline))
     except OSError as exc:
         log.warning("could not write heartbeat: %s", exc)
 
 
 def run_cycle(cfg, state, opener=urlopen, sleep=time.sleep, force_full: bool = False) -> bool:
     """Poll once. Returns True when state changed and should be persisted."""
-    result = fetch_all(cfg, state.etags, opener, force_full=force_full)
+    result = fetch_all(cfg, state.etags, opener, force_full=force_full, sleep=sleep)
     if result.products is None:
-        _touch(cfg.heartbeat_path)
         return False
 
     state.etags = result.etags
@@ -55,8 +63,6 @@ def run_cycle(cfg, state, opener=urlopen, sleep=time.sleep, force_full: bool = F
         log.error("withholding %d undelivered alert(s) for retry next cycle", len(withheld))
 
     alerting.apply_state(cfg, state, result.products, withheld)
-
-    _touch(cfg.heartbeat_path)
     return True
 
 
@@ -71,10 +77,12 @@ def _loop(cfg, state) -> int:
             failures = 0
             delay = cfg.poll_seconds
         except FetchError as exc:
-            delay = BACKOFF[min(failures, len(BACKOFF) - 1)]
+            backoff = BACKOFF[min(failures, len(BACKOFF) - 1)]
+            delay = min(max(backoff, exc.retry_after or 0), MAX_DELAY_SECONDS)
             failures += 1
             log.warning("cycle failed (%s); backing off %ds", exc, delay)
         cycles += 1
+        _touch(cfg.heartbeat_path, time.time() + delay)
         time.sleep(delay)
 
 

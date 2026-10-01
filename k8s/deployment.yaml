@@ -31,7 +31,7 @@ spec:
             - name: MIN_DISCOUNT_PCT
               value: "10"
             - name: POLL_SECONDS
-              value: "60"
+              value: "300"
             - name: HEARTBEAT_PATH
               value: /tmp/heartbeat
           resources:
@@ -59,7 +59,7 @@ spec:
                 - |
                   import os, sys, time
                   p = os.environ["HEARTBEAT_PATH"]
-                  sys.exit(0 if os.path.exists(p) and time.time() - float(open(p).read()) < 300 else 1)
+                  sys.exit(0 if os.path.exists(p) and time.time() < float(open(p).read()) + 300 else 1)
             initialDelaySeconds: 90
             periodSeconds: 60
             failureThreshold: 2

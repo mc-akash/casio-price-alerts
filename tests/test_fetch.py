@@ -4,8 +4,8 @@ from urllib.error import HTTPError, URLError
 
 import pytest
 
-from casio_watch.config import load_config
-from casio_watch.store import FetchError, fetch_all, fetch_page
+from casio_watch.config import PAGE_SIZE, load_config
+from casio_watch.store import PAGE_DELAY_SECONDS, FetchError, fetch_all, fetch_page
 
 CFG = load_config({"NTFY_TOPIC": "t", "MIN_DISCOUNT_PCT": "10"})
 
@@ -51,8 +51,17 @@ class FakeOpener:
         return result
 
 
-def http_error(code):
-    return HTTPError("url", code, "msg", {}, None)
+def http_error(code, headers=None):
+    return HTTPError("url", code, "msg", headers or {}, None)
+
+
+def no_sleep(_seconds):
+    return None
+
+
+def full_page(etag=None):
+    """A page holding PAGE_SIZE products, so pagination must continue past it."""
+    return FakeResponse({"products": [DISCOUNTED] * PAGE_SIZE}, etag=etag)
 
 
 def test_fetch_page_returns_body_and_etag():
@@ -89,6 +98,28 @@ def test_fetch_page_raises_fetch_error_on_server_error():
         fetch_page(CFG, 1, None, opener)
 
 
+def test_fetch_page_429_carries_retry_after():
+    opener = FakeOpener([http_error(429, {"Retry-After": "120"})])
+    with pytest.raises(FetchError, match="429") as caught:
+        fetch_page(CFG, 1, None, opener)
+    assert caught.value.retry_after == 120
+
+
+def test_fetch_page_429_without_usable_retry_after():
+    for headers in ({}, {"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}):
+        opener = FakeOpener([http_error(429, headers)])
+        with pytest.raises(FetchError) as caught:
+            fetch_page(CFG, 1, None, opener)
+        assert caught.value.retry_after is None
+
+
+def test_fetch_page_server_error_has_no_retry_after():
+    opener = FakeOpener([http_error(503, {"Retry-After": "60"})])
+    with pytest.raises(FetchError) as caught:
+        fetch_page(CFG, 1, None, opener)
+    assert caught.value.retry_after is None
+
+
 def test_fetch_page_raises_fetch_error_on_network_failure():
     opener = FakeOpener([URLError("dns boom")])
     with pytest.raises(FetchError, match="dns boom"):
@@ -110,19 +141,39 @@ def test_fetch_page_raises_fetch_error_on_invalid_json():
         fetch_page(CFG, 1, None, opener)
 
 
-def test_fetch_all_first_run_crawls_until_empty_page():
-    opener = FakeOpener([
-        FakeResponse({"products": [DISCOUNTED, FULL_PRICE]}, etag='W/"p1"'),
-        FakeResponse({"products": []}, etag='W/"p2"'),
-    ])
-    result = fetch_all(CFG, {}, opener)
+def test_fetch_all_first_run_stops_at_a_short_page():
+    opener = FakeOpener([FakeResponse({"products": [DISCOUNTED, FULL_PRICE]}, etag='W/"p1"')])
+    result = fetch_all(CFG, {}, opener, sleep=no_sleep)
     assert sorted(p.handle for p in result.products) == ["ga-2100rl-1a", "gma-p2110sc-4a"]
     assert result.etags == {"1": 'W/"p1"'}
+    assert len(opener.requests) == 1
+
+
+def test_fetch_all_crawls_past_full_pages_until_empty_page():
+    opener = FakeOpener([full_page('W/"p1"'), FakeResponse({"products": []}, etag='W/"p2"')])
+    result = fetch_all(CFG, {}, opener, sleep=no_sleep)
+    assert len(result.products) == PAGE_SIZE
+    assert result.etags == {"1": 'W/"p1"'}
+    assert len(opener.requests) == 2
+
+
+def test_fetch_all_spaces_out_every_request():
+    """Two probes then a two-page crawl: a pause before every request but the first."""
+    pauses = []
+    opener = FakeOpener([
+        http_error(304),
+        FakeResponse({"products": [DISCOUNTED]}, etag='W/"p2-new"'),
+        full_page('W/"p1"'),
+        FakeResponse({"products": [DISCOUNTED]}, etag='W/"p2-new"'),
+    ])
+    fetch_all(CFG, {"1": 'W/"p1"', "2": 'W/"p2"'}, opener, sleep=pauses.append)
+    assert len(opener.requests) == 4
+    assert pauses == [PAGE_DELAY_SECONDS] * 3
 
 
 def test_fetch_all_skips_cycle_when_all_pages_unchanged():
     opener = FakeOpener([http_error(304)])
-    result = fetch_all(CFG, {"1": 'W/"p1"'}, opener)
+    result = fetch_all(CFG, {"1": 'W/"p1"'}, opener, sleep=no_sleep)
     assert result.products is None
     assert result.etags == {"1": 'W/"p1"'}
     assert len(opener.requests) == 1
@@ -132,31 +183,28 @@ def test_fetch_all_refetches_everything_when_a_page_changed():
     opener = FakeOpener([
         FakeResponse({"products": [DISCOUNTED]}, etag='W/"new"'),
         FakeResponse({"products": [DISCOUNTED]}, etag='W/"new"'),
-        FakeResponse({"products": []}, etag='W/"p2"'),
     ])
-    result = fetch_all(CFG, {"1": 'W/"old"'}, opener)
+    result = fetch_all(CFG, {"1": 'W/"old"'}, opener, sleep=no_sleep)
     assert [p.handle for p in result.products] == ["gma-p2110sc-4a"]
     assert result.etags == {"1": 'W/"new"'}
+    assert opener.responses == []
 
 
 def test_fetch_all_force_full_skips_the_probe():
-    opener = FakeOpener([
-        FakeResponse({"products": [DISCOUNTED]}, etag='W/"p1"'),
-        FakeResponse({"products": []}),
-    ])
-    result = fetch_all(CFG, {"1": 'W/"p1"'}, opener, force_full=True)
+    opener = FakeOpener([FakeResponse({"products": [DISCOUNTED]}, etag='W/"p1"')])
+    result = fetch_all(CFG, {"1": 'W/"p1"'}, opener, force_full=True, sleep=no_sleep)
     assert result.products is not None
-    assert len(opener.requests) == 2
+    assert len(opener.requests) == 1
 
 
 def test_fetch_all_propagates_fetch_error():
     opener = FakeOpener([URLError("offline")])
     with pytest.raises(FetchError):
-        fetch_all(CFG, {}, opener)
+        fetch_all(CFG, {}, opener, sleep=no_sleep)
 
 
 def test_fetch_all_stops_at_max_pages():
-    opener = FakeOpener([FakeResponse({"products": [DISCOUNTED]}) for _ in range(25)])
-    result = fetch_all(CFG, {}, opener)
+    opener = FakeOpener([full_page() for _ in range(25)])
+    result = fetch_all(CFG, {}, opener, sleep=no_sleep)
     assert len(opener.requests) == 20
     assert result.products is not None

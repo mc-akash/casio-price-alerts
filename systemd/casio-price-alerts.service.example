@@ -11,7 +11,7 @@ Environment=NTFY_TOPIC=REPLACE_WITH_YOUR_TOPIC
 Environment=STATE_PATH=%S/casio-price-alerts/state.json
 Environment=HEARTBEAT_PATH=%S/casio-price-alerts/heartbeat
 Environment=MIN_DISCOUNT_PCT=10
-Environment=POLL_SECONDS=60
+Environment=POLL_SECONDS=300
 Environment=PYTHONUNBUFFERED=1
 StateDirectory=casio-price-alerts
 ExecStart=/usr/bin/python3 -m casio_watch --loop

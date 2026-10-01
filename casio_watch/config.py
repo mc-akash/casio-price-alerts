@@ -87,7 +87,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
     if not 1 <= min_pct <= 99:
         raise ConfigError(f"MIN_DISCOUNT_PCT must be between 1 and 99, got {min_pct}")
 
-    poll = _int(env, "POLL_SECONDS", 60)
+    poll = _int(env, "POLL_SECONDS", 300)
     if poll < MIN_POLL_SECONDS:
         raise ConfigError(
             f"POLL_SECONDS must be at least {MIN_POLL_SECONDS} to stay a polite client, got {poll}"

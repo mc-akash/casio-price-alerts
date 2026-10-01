@@ -67,9 +67,8 @@ def noop_sleep(_s):
 
 
 def catalogue(*products, etag='W/"p1"'):
-    """One page of products followed by the empty page that ends pagination."""
-    return [FakeResponse({"products": list(products)}, etag=etag),
-            FakeResponse({"products": []})]
+    """One short page of products; being short, it ends pagination."""
+    return [FakeResponse({"products": list(products)}, etag=etag)]
 
 
 # --- self test --------------------------------------------------------------
@@ -152,12 +151,6 @@ def test_notify_failure_withholds_so_it_retries(tmp_path):
     assert state.prices["gma"] == 9495.00, "price must not advance while the alert is unsent"
 
 
-def test_heartbeat_written_each_cycle(tmp_path):
-    opener = FakeOpener(catalogue(FULL_PRICE))
-    run_cycle(cfg_for(tmp_path), State(), opener, noop_sleep)
-    assert (tmp_path / "beat").exists()
-
-
 # --- entry point ------------------------------------------------------------
 
 def test_main_once_returns_zero_and_persists_state(tmp_path, monkeypatch):
@@ -216,7 +209,7 @@ def test_loop_backs_off_progressively(tmp_path, monkeypatch):
     monkeypatch.setattr(entry.time, "sleep", record)
     with pytest.raises(LoopBreak):
         entry._loop(cfg_for(tmp_path), State())
-    assert delays == [60, 120, 240, 300, 300]
+    assert delays == [60, 300, 900, 1800, 1800]
 
 
 def test_loop_resets_backoff_after_success(tmp_path, monkeypatch):
@@ -239,4 +232,54 @@ def test_loop_resets_backoff_after_success(tmp_path, monkeypatch):
     monkeypatch.setattr(entry.time, "sleep", record)
     with pytest.raises(LoopBreak):
         entry._loop(cfg_for(tmp_path), State())
-    assert delays == [60, 120, 60, 60]
+    assert delays == [60, 300, 300, 60]
+
+
+def run_loop(tmp_path, monkeypatch, outcomes, **cfg):
+    """Drive _loop through scripted cycle outcomes; return (delays, heartbeat deadlines)."""
+    from casio_watch import __main__ as entry
+    outcomes = list(outcomes)
+    delays, deadlines = [], []
+    config = cfg_for(tmp_path, **cfg)
+
+    def cycle(*a, **k):
+        r = outcomes.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return False
+
+    def record(seconds):
+        delays.append(seconds)
+        deadlines.append(float((tmp_path / "beat").read_text()))
+        if not outcomes:
+            raise LoopBreak
+
+    monkeypatch.setattr(entry, "run_cycle", cycle)
+    monkeypatch.setattr(entry.time, "sleep", record)
+    monkeypatch.setattr(entry.time, "time", lambda: 1000.0)
+    with pytest.raises(LoopBreak):
+        entry._loop(config, State())
+    return delays, deadlines
+
+
+def test_loop_honours_a_longer_retry_after(tmp_path, monkeypatch):
+    delays, _ = run_loop(tmp_path, monkeypatch, [FetchError("429", retry_after=1200)])
+    assert delays == [1200]
+
+
+def test_loop_ignores_a_retry_after_shorter_than_the_backoff(tmp_path, monkeypatch):
+    delays, _ = run_loop(tmp_path, monkeypatch,
+                         [FetchError("429"), FetchError("429", retry_after=10)])
+    assert delays == [60, 300]
+
+
+def test_loop_caps_retry_after(tmp_path, monkeypatch):
+    from casio_watch.__main__ import MAX_DELAY_SECONDS
+    delays, _ = run_loop(tmp_path, monkeypatch, [FetchError("429", retry_after=86400)])
+    assert delays == [MAX_DELAY_SECONDS]
+
+
+def test_heartbeat_records_when_the_next_cycle_is_due(tmp_path, monkeypatch):
+    """The healthcheck compares against this deadline, so a long backoff stays healthy."""
+    _, deadlines = run_loop(tmp_path, monkeypatch, [None, FetchError("429", retry_after=1200)])
+    assert deadlines == [1000.0 + 300, 1000.0 + 1200]

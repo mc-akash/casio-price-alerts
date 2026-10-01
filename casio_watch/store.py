@@ -4,19 +4,40 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import urllib.request
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
+
+from casio_watch.config import PAGE_SIZE
 
 log = logging.getLogger(__name__)
 
 MAX_PAGES = 20
 TIMEOUT_SECONDS = 20
-USER_AGENT = "casio-price-alerts/1.0 (personal price alert; 1 request/min)"
+# The whole store is several pages; firing them back-to-back from one IP is what
+# Shopify's storefront limiter punishes, so every request after the first waits.
+PAGE_DELAY_SECONDS = 2
+USER_AGENT = "casio-price-alerts/1.0 (personal price alert)"
 
 
 class FetchError(Exception):
-    """Raised when the catalogue could not be retrieved."""
+    """Raised when the catalogue could not be retrieved.
+
+    retry_after carries the server's Retry-After, in seconds, on a 429.
+    """
+
+    def __init__(self, message: str, retry_after: int | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def _retry_after(exc: HTTPError) -> int | None:
+    """Seconds from a 429's Retry-After; the HTTP-date form is ignored."""
+    if exc.code != 429 or exc.headers is None:
+        return None
+    raw = (exc.headers.get("Retry-After") or "").strip()
+    return int(raw) if raw.isdigit() else None
 
 
 @dataclass(frozen=True)
@@ -134,7 +155,8 @@ def fetch_page(cfg, page: int, etag: str | None, opener=urllib.request.urlopen) 
     except HTTPError as exc:
         if exc.code == 304:
             return PageResult(body=None, etag=etag, not_modified=True)
-        raise FetchError(f"page {page} returned HTTP {exc.code}") from exc
+        raise FetchError(f"page {page} returned HTTP {exc.code}",
+                         retry_after=_retry_after(exc)) from exc
     except URLError as exc:
         raise FetchError(f"page {page} unreachable: {exc.reason}") from exc
 
@@ -146,20 +168,37 @@ def fetch_page(cfg, page: int, etag: str | None, opener=urllib.request.urlopen) 
     return PageResult(body=body, etag=new_etag, not_modified=False)
 
 
+def _paced(opener, sleep):
+    """Wrap opener so every request after the first waits PAGE_DELAY_SECONDS."""
+    sent = 0
+
+    def paced(request, timeout=None):
+        nonlocal sent
+        if sent:
+            sleep(PAGE_DELAY_SECONDS)
+        sent += 1
+        return opener(request, timeout=timeout)
+
+    return paced
+
+
 def _crawl(cfg, opener) -> list[PageResult]:
-    """Walk pages unconditionally until one comes back empty."""
+    """Walk pages unconditionally until one comes back short or empty."""
     pages = []
     for page in range(1, MAX_PAGES + 1):
         result = fetch_page(cfg, page, None, opener)
-        if not (result.body.get("products") or []):
+        count = len(result.body.get("products") or [])
+        if count:
+            pages.append(result)
+        if count < PAGE_SIZE:
             break
-        pages.append(result)
     return pages
 
 
 def fetch_all(cfg, etags: dict[str, str], opener=urllib.request.urlopen,
-              force_full: bool = False) -> FetchResult:
+              force_full: bool = False, sleep=time.sleep) -> FetchResult:
     """Return the current catalogue, or FetchResult(products=None) when unchanged."""
+    opener = _paced(opener, sleep)
     if etags and not force_full:
         probes = [fetch_page(cfg, int(page), tag, opener) for page, tag in sorted(etags.items())]
         if all(probe.not_modified for probe in probes):

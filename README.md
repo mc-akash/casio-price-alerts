@@ -1,10 +1,10 @@
 # Casio Price Alerts
 
 Watches the Casio India store (`casiostore.bhawar.com`) and pushes a phone
-notification within a minute of a watch being discounted.
+notification within a few minutes of a watch being discounted.
 
 The store runs unannounced sales, some of them short-lived, and offers no way to be
-notified. This polls it every 60 seconds and alerts you through
+notified. This polls it every 5 minutes and alerts you through
 [ntfy](https://ntfy.sh).
 
 Standard library only — no runtime dependencies. Runs as a plain script, a systemd
@@ -38,9 +38,11 @@ facet defines exactly one bucket, so it cannot express a lower threshold, and if
 underlying metafield were ever renamed the filtered page would silently return either
 the entire catalogue or nothing at all — indistinguishable from "no sales this month".
 
-Each poll sends `If-None-Match` per page. An unchanged catalogue costs ~0 bytes, which
-keeps a once-a-minute poll a polite neighbour. Every 30th cycle refetches
-unconditionally so a newly added page cannot hide behind a `304`.
+Each poll sends `If-None-Match` per page, spaced 2s apart. An unchanged catalogue
+costs ~0 bytes, but every request still counts against Shopify's per-IP storefront
+limit: a once-a-minute whole-store poll gets a server IP answered with `429` all day.
+On a `429` the watcher honours `Retry-After` and backs off up to 30 minutes. Every
+30th cycle refetches unconditionally so a newly added page cannot hide behind a `304`.
 
 You are alerted when a deal first appears, again if it deepens by a point, and again
 if an ended deal later returns. Undelivered notifications are withheld from state and
@@ -84,11 +86,11 @@ python3 -m casio_watch --loop    # poll forever
 | `NTFY_TOPIC` | *required* | ntfy topic; treat as a credential |
 | `NTFY_SERVER` | `https://ntfy.sh` | point at a self-hosted ntfy |
 | `MIN_DISCOUNT_PCT` | `10` | alert threshold |
-| `POLL_SECONDS` | `60` | minimum 30 |
+| `POLL_SECONDS` | `300` | minimum 30; below 300 risks `429`s from the store |
 | `PRODUCT_TYPES` | `Watches` | comma-separated types to watch; `*` for everything |
 | `WATCHLIST` | *(empty)* | exact product titles to alert on when back in stock |
 | `STATE_PATH` | `/data/state.json` | last-seen prices, stock and per-page ETags |
-| `HEARTBEAT_PATH` | `/tmp/heartbeat` | liveness probe target |
+| `HEARTBEAT_PATH` | `/tmp/heartbeat` | liveness probe target; holds when the next cycle is due |
 | `LOG_LEVEL` | `INFO` | |
 
 All of these except `NTFY_TOPIC` are set in `docker-compose.yaml`.
@@ -130,6 +132,7 @@ nothing between alerts. Judge liveness from `(healthy)`, not log activity.
 | `permission denied ... docker.sock` | not in the `docker` group, or the login session predates `usermod` |
 | healthy but no alerts | nothing is discounted — normal |
 | repeat alerts after restart | state volume was removed |
+| `HTTP 429` warnings | store rate limit; raise `POLL_SECONDS` — the watcher backs off on its own |
 
 ## Tests
 

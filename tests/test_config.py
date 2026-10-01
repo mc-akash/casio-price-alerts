@@ -25,7 +25,7 @@ def test_defaults_applied():
     cfg = load_config(BASE_ENV)
     assert cfg.ntfy_server == "https://ntfy.sh"
     assert cfg.min_discount_pct == 10
-    assert cfg.poll_seconds == 60
+    assert cfg.poll_seconds == 300
     assert cfg.product_types == ("Watches",)
     assert cfg.watchlist == ()
     assert cfg.state_path == Path("/data/state.json")
