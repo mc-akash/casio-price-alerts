@@ -131,7 +131,10 @@ def apply_state(cfg, state, products: list[Product], withheld: set[str]) -> None
         state.stock[p.handle] = p.available
         state.silent[p.handle] = SILENT_SALE_TAG in p.tags and p.available
 
-        if p.discount_pct >= cfg.min_discount_pct:
+        # A sold-out deal is forgotten, like an ended one: the store keeps the
+        # discount on sold-out products, so remembering it would silence the
+        # restock at that same discount.
+        if p.available and p.discount_pct >= cfg.min_discount_pct:
             state.seen[p.handle] = p.discount_pct
         else:
             state.seen.pop(p.handle, None)

@@ -174,3 +174,36 @@ def test_ended_discount_is_forgotten_so_it_can_alert_again():
     state = State(prices={"a": 600.0}, seen={"a": 40})
     apply_state(CFG, state, [prod("a", price=1000.0, compare_at=1000.0)], withheld=set())
     assert "a" not in state.seen
+
+
+def test_sold_out_discount_is_forgotten_so_a_restock_can_alert_again():
+    """A deal you cannot buy has ended, as far as alerts are concerned."""
+    state = State(prices={"a": 300.0}, stock={"a": True}, seen={"a": 70})
+    apply_state(CFG, state, [prod("a", price=300.0, compare_at=1000.0, available=False)],
+                withheld=set())
+    assert "a" not in state.seen
+
+
+def test_restock_at_the_same_discount_alerts_again():
+    """GBD-H2000 at 70% off sells out, then returns days later still at 70% off."""
+    state = State(prices={"a": 1000.0}, stock={"a": True})
+    on_sale = prod("a", "GBD-H2000-1A", price=300.0, compare_at=1000.0)
+    sold_out = prod("a", "GBD-H2000-1A", price=300.0, compare_at=1000.0, available=False)
+
+    timeline = []
+    for snapshot in (on_sale, sold_out, sold_out, on_sale):
+        alerts = compute(CFG, [snapshot], state)
+        timeline.append(kinds(alerts))
+        apply_state(CFG, state, [snapshot], withheld=set())
+
+    assert timeline == [["discount"], [], [], ["discount"]]
+
+
+def test_staying_in_stock_at_the_same_discount_stays_quiet():
+    state = State(prices={"a": 1000.0}, stock={"a": True})
+    on_sale = prod("a", price=300.0, compare_at=1000.0)
+    timeline = []
+    for _ in range(3):
+        timeline.append(kinds(compute(CFG, [on_sale], state)))
+        apply_state(CFG, state, [on_sale], withheld=set())
+    assert timeline == [["discount"], [], []]

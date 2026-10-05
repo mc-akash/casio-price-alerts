@@ -45,7 +45,8 @@ On a `429` the watcher honours `Retry-After` and backs off up to 30 minutes. Eve
 30th cycle refetches unconditionally so a newly added page cannot hide behind a `304`.
 
 You are alerted when a deal first appears, again if it deepens by a point, and again
-if an ended deal later returns. Undelivered notifications are withheld from state and
+if an ended deal later returns — including a sold-out watch restocked at the same
+discount. Undelivered notifications are withheld from state and
 retried rather than lost.
 
 ## Quick start
