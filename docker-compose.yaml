@@ -21,7 +21,7 @@ services:
 
       NTFY_SERVER: https://ntfy.sh
       MIN_DISCOUNT_PCT: "10"
-      POLL_SECONDS: "300"
+      POLL_SECONDS: "120"
 
       # Whole store is polled; this narrows it. "*" means every type.
       PRODUCT_TYPES: Watches
