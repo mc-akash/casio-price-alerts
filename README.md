@@ -134,7 +134,7 @@ nothing between alerts. Judge liveness from `(healthy)`, not log activity.
 | `permission denied ... docker.sock` | not in the `docker` group, or the login session predates `usermod` |
 | healthy but no alerts | nothing is discounted — normal |
 | repeat alerts after restart | state volume was removed |
-| `HTTP 429` warnings | store rate limit; raise `POLL_SECONDS` — the watcher backs off on its own |
+| `HTTP 429` warnings | store rate limit; raise `POLL_SECONDS` — the watcher backs off on its own and pushes one "Store is rate-limiting the watcher" warning per outage |
 | `HTTP 429` from the first request, every time | the edge is rejecting the client's TLS fingerprint, not the rate — see below |
 
 ### Why not urllib

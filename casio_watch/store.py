@@ -25,12 +25,15 @@ USER_AGENT = "casio-price-alerts/1.0 (personal price alert)"
 class FetchError(Exception):
     """Raised when the catalogue could not be retrieved.
 
+    status is the HTTP status when the server answered, None for network failures;
     retry_after carries the server's Retry-After, in seconds, on a 429.
     """
 
-    def __init__(self, message: str, retry_after: int | None = None):
+    def __init__(self, message: str, retry_after: int | None = None,
+                 status: int | None = None):
         super().__init__(message)
         self.retry_after = retry_after
+        self.status = status
 
 
 def _retry_after(exc: HTTPError) -> int | None:
@@ -157,7 +160,7 @@ def fetch_page(cfg, page: int, etag: str | None, opener=browser_open) -> PageRes
         if exc.code == 304:
             return PageResult(body=None, etag=etag, not_modified=True)
         raise FetchError(f"page {page} returned HTTP {exc.code}",
-                         retry_after=_retry_after(exc)) from exc
+                         retry_after=_retry_after(exc), status=exc.code) from exc
     except URLError as exc:
         raise FetchError(f"page {page} unreachable: {exc.reason}") from exc
 

@@ -24,6 +24,7 @@ class State:
     stock: dict[str, bool] = field(default_factory=dict)    # handle -> was available
     silent: dict[str, bool] = field(default_factory=dict)   # handle -> tagged and available
     etags: dict[str, str] = field(default_factory=dict)     # page number -> ETag
+    rate_limited: bool = False  # a 429 warning was sent; cleared by the next good poll
 
 
 def load_state(path: Path) -> State:
@@ -41,6 +42,7 @@ def load_state(path: Path) -> State:
             stock={str(k): bool(v) for k, v in (payload.get("stock") or {}).items()},
             silent={str(k): bool(v) for k, v in (payload.get("silent") or {}).items()},
             etags={str(k): str(v) for k, v in (payload.get("etags") or {}).items()},
+            rate_limited=bool(payload.get("rate_limited", False)),
         )
     except (ValueError, TypeError, AttributeError, OSError) as exc:
         backup = path.with_suffix(path.suffix + ".bak")
@@ -62,5 +64,6 @@ def save_state(path: Path, state: State) -> None:
         "stock": state.stock,
         "silent": state.silent,
         "etags": state.etags,
+        "rate_limited": state.rate_limited,
     }, indent=2))
     os.replace(tmp, path)

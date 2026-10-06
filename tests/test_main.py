@@ -4,7 +4,7 @@ import json
 import pytest
 from urllib.error import HTTPError, URLError
 
-from casio_watch.__main__ import main, run_cycle, self_test
+from casio_watch.__main__ import main, note_rate_limit, run_cycle, self_test
 from casio_watch.config import load_config
 from casio_watch.notify import NotifyError
 from casio_watch.state import State
@@ -249,7 +249,7 @@ def test_loop_resets_backoff_after_success(tmp_path, monkeypatch):
     assert delays == [60, 300, 300, 60]
 
 
-def run_loop(tmp_path, monkeypatch, outcomes, **cfg):
+def run_loop(tmp_path, monkeypatch, outcomes, state=None, **cfg):
     """Drive _loop through scripted cycle outcomes; return (delays, heartbeat deadlines)."""
     from casio_watch import __main__ as entry
     outcomes = list(outcomes)
@@ -272,7 +272,7 @@ def run_loop(tmp_path, monkeypatch, outcomes, **cfg):
     monkeypatch.setattr(entry.time, "sleep", record)
     monkeypatch.setattr(entry.time, "time", lambda: 1000.0)
     with pytest.raises(LoopBreak):
-        entry._loop(config, State())
+        entry._loop(config, State() if state is None else state)
     return delays, deadlines
 
 
@@ -297,3 +297,57 @@ def test_heartbeat_records_when_the_next_cycle_is_due(tmp_path, monkeypatch):
     """The healthcheck compares against this deadline, so a long backoff stays healthy."""
     _, deadlines = run_loop(tmp_path, monkeypatch, [None, FetchError("429", retry_after=1200)])
     assert deadlines == [1000.0 + 300, 1000.0 + 1200]
+
+
+
+# --- rate-limit warning -----------------------------------------------------
+
+RATE_LIMITED = FetchError("page 1 returned HTTP 429", status=429)
+
+
+def test_first_429_notifies_and_marks_state(tmp_path):
+    state = State()
+    ntfy = FakeOpener([FakeResponse()])
+    assert note_rate_limit(cfg_for(tmp_path), state, RATE_LIMITED, ntfy, noop_sleep) is True
+    assert len(ntfy.posted()) == 1
+    assert state.rate_limited is True
+
+
+def test_repeat_429_stays_quiet(tmp_path):
+    state = State(rate_limited=True)
+    ntfy = FakeOpener([])
+    assert note_rate_limit(cfg_for(tmp_path), state, RATE_LIMITED, ntfy, noop_sleep) is False
+    assert ntfy.requests == []
+
+
+def test_other_fetch_failures_do_not_notify(tmp_path):
+    state = State()
+    ntfy = FakeOpener([])
+    for exc in (FetchError("page 1 returned HTTP 503", status=503), FetchError("offline")):
+        assert note_rate_limit(cfg_for(tmp_path), state, exc, ntfy, noop_sleep) is False
+    assert ntfy.requests == []
+    assert state.rate_limited is False
+
+
+def test_undelivered_warning_is_retried_on_the_next_429(tmp_path):
+    state = State()
+    ntfy = FakeOpener([URLError("down")] * 3 + [FakeResponse()])
+    assert note_rate_limit(cfg_for(tmp_path), state, RATE_LIMITED, ntfy, noop_sleep) is False
+    assert state.rate_limited is False
+    assert note_rate_limit(cfg_for(tmp_path), state, RATE_LIMITED, ntfy, noop_sleep) is True
+    assert len(ntfy.posted()) == 4
+
+
+def test_loop_warns_once_per_outage_and_persists_it(tmp_path, monkeypatch):
+    """Two 429s, a recovery, then a fresh outage: exactly two warnings."""
+    from casio_watch import __main__ as entry
+    ntfy = FakeOpener([FakeResponse(), FakeResponse()])
+    monkeypatch.setattr(entry, "urlopen", ntfy)
+    state = State()
+    run_loop(tmp_path, monkeypatch, [RATE_LIMITED, RATE_LIMITED], state=state)
+    assert len(ntfy.posted()) == 1
+    saved = json.loads((tmp_path / "state.json").read_text())
+    assert saved["rate_limited"] is True, "a restart mid-outage must not warn again"
+
+    run_loop(tmp_path, monkeypatch, [None, RATE_LIMITED], state=state)
+    assert len(ntfy.posted()) == 2

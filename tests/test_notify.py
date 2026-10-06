@@ -6,7 +6,7 @@ from urllib.error import HTTPError, URLError
 from casio_watch.alerts import Alert
 from casio_watch.config import load_config
 from casio_watch.notify import (MAX_ACTIONS, NotifyError, RETRY_DELAYS,
-                                format_actions, format_group, ping, send)
+                                format_actions, format_group, ping, rate_limited, send)
 from casio_watch.store import Product
 
 CFG = load_config({"NTFY_TOPIC": "secret-topic"})
@@ -175,3 +175,18 @@ def test_ping_raises_when_undeliverable():
     opener = FakeOpener([URLError("blocked")] * 3)
     with pytest.raises(NotifyError):
         ping(CFG, opener, FakeSleep())
+
+
+def test_rate_limited_warns_once_with_the_reason():
+    opener = FakeOpener([FakeResponse(b"ok")])
+    rate_limited(CFG, "page 1 returned HTTP 429", opener, FakeSleep())
+    request = opener.requests[0]
+    assert "rate" in request.get_header("Title").lower()
+    assert request.get_header("Tags") == "warning"
+    assert "HTTP 429" in request.data.decode()
+
+
+def test_rate_limited_raises_when_undeliverable():
+    opener = FakeOpener([URLError("blocked")] * 3)
+    with pytest.raises(NotifyError):
+        rate_limited(CFG, "page 1 returned HTTP 429", opener, FakeSleep())

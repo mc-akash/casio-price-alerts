@@ -208,3 +208,17 @@ def test_fetch_all_stops_at_max_pages():
     result = fetch_all(CFG, {}, opener, sleep=no_sleep)
     assert len(opener.requests) == 20
     assert result.products is not None
+
+
+def test_fetch_error_carries_the_http_status():
+    opener = FakeOpener([http_error(429)])
+    with pytest.raises(FetchError) as caught:
+        fetch_page(CFG, 1, None, opener)
+    assert caught.value.status == 429
+
+
+def test_fetch_error_has_no_status_on_network_failure():
+    opener = FakeOpener([URLError("dns boom")])
+    with pytest.raises(FetchError) as caught:
+        fetch_page(CFG, 1, None, opener)
+    assert caught.value.status is None

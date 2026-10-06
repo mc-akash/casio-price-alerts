@@ -50,6 +50,25 @@ def _touch(path, deadline: float) -> None:
         log.warning("could not write heartbeat: %s", exc)
 
 
+def note_rate_limit(cfg, state, exc: FetchError, opener=urlopen,
+                    sleep=time.sleep) -> bool:
+    """Warn once when the store starts answering 429. Returns True when state changed.
+
+    The flag lives in persisted state, so a restart mid-outage stays quiet; the next
+    successful poll clears it. An undelivered warning leaves the flag unset, so the
+    next 429 tries again.
+    """
+    if exc.status != 429 or state.rate_limited:
+        return False
+    try:
+        notify.rate_limited(cfg, str(exc), opener, sleep)
+    except NotifyError as exc_notify:
+        log.error("could not deliver rate-limit warning: %s", exc_notify)
+        return False
+    state.rate_limited = True
+    return True
+
+
 def run_cycle(cfg, state, opener=urlopen, sleep=time.sleep, force_full: bool = False,
               store_opener=None) -> bool:
     """Poll once. Returns True when state changed and should be persisted.
@@ -79,8 +98,13 @@ def _loop(cfg, state) -> int:
     while True:
         try:
             force_full = cycles % FULL_REFRESH_CYCLES == 0
-            if run_cycle(cfg, state, urlopen, force_full=force_full,
-                         store_opener=browser_open):
+            changed = run_cycle(cfg, state, urlopen, force_full=force_full,
+                                store_opener=browser_open)
+            if state.rate_limited:
+                log.info("store reachable again")
+                state.rate_limited = False
+                changed = True
+            if changed:
                 save_state(cfg.state_path, state)
             failures = 0
             delay = cfg.poll_seconds
@@ -89,6 +113,8 @@ def _loop(cfg, state) -> int:
             delay = min(max(backoff, exc.retry_after or 0), MAX_DELAY_SECONDS)
             failures += 1
             log.warning("cycle failed (%s); backing off %ds", exc, delay)
+            if note_rate_limit(cfg, state, exc, urlopen):
+                save_state(cfg.state_path, state)
         cycles += 1
         _touch(cfg.heartbeat_path, time.time() + delay)
         time.sleep(delay)

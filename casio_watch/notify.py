@@ -135,3 +135,12 @@ def ping(cfg, opener=urllib.request.urlopen, sleep=time.sleep) -> None:
     _post(cfg, body, {"Title": "Watcher online", "Priority": "min",
                       "Tags": "white_check_mark"}, opener, sleep)
     log.info("startup ping delivered")
+
+
+def rate_limited(cfg, reason: str, opener=urllib.request.urlopen, sleep=time.sleep) -> None:
+    """Warn that the store is refusing polls, so silence is not mistaken for no deals."""
+    body = (f"The store answered {reason}. The watcher is backing off and retrying; "
+            f"no deals can be seen until it recovers. This is sent once per outage.")
+    _post(cfg, body, {"Title": "Store is rate-limiting the watcher", "Priority": "high",
+                      "Tags": "warning"}, opener, sleep)
+    log.info("rate-limit warning delivered")

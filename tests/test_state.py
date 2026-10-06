@@ -51,3 +51,15 @@ def test_older_state_without_new_fields_still_loads(tmp_path):
     state = load_state(path)
     assert state.seen == {"a": 30}
     assert state.prices == {} and state.stock == {} and state.silent == {}
+
+
+def test_rate_limited_flag_round_trips(tmp_path):
+    path = tmp_path / "state.json"
+    save_state(path, State(rate_limited=True))
+    assert load_state(path).rate_limited is True
+
+
+def test_rate_limited_defaults_to_false_for_older_state(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({"seen": {"a": 30}}))
+    assert load_state(path).rate_limited is False
